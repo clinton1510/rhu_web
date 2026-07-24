@@ -1,0 +1,535 @@
+/**
+ * RedPulse RHU — Responsive Enhancement System
+ * Scales cleanly from 360px mobile to 1440px desktop.
+ * No structural changes — spacing, typography, and touch targets only.
+ */
+
+/* ─────────────────────────────────────────
+   RESET & BASE
+   ───────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  /* Ensure the entire page scrolls on mobile */
+  height: 100%;
+  overflow-y: auto;
+}
+
+body {
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Prevent rubber-band scroll hiding content */
+  min-height: 100%;
+}
+
+/* Root app container */
+#root {
+  min-height: 100vh;
+}
+
+/* All dashboard pages — natural block scroll */
+.min-h-screen {
+  height: auto !important;
+  overflow-y: visible;
+}
+
+/* Fixed bottom nav — always on top */
+nav.fixed.bottom-0 {
+  box-shadow: 0 -1px 0 rgba(0,0,0,0.08);
+}
+
+/* Ensure fixed bottom nav doesn't cut content — global rule */
+@media (max-width: 639px) {
+  main, .main-content {
+    padding-bottom: 112px !important; /* 64px nav + 48px extra breathing room */
+  }
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ─────────────────────────────────────────
+   SCROLLBAR UTILITIES
+   ───────────────────────────────────────── */
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+* { scrollbar-width: thin; scrollbar-color: #cbd5e1 #f1f5f9; }
+
+/* ─────────────────────────────────────────
+   SAFE AREA (notched phones)
+   ───────────────────────────────────────── */
+
+.safe-area-pb {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ─────────────────────────────────────────
+   FORMS — prevent iOS zoom
+   ───────────────────────────────────────── */
+
+input,
+select,
+textarea {
+  font-size: 16px; /* prevents iOS auto-zoom */
+  width: 100%;
+}
+
+@media (min-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 14px;
+  }
+}
+
+/* ─────────────────────────────────────────
+   TOUCH TARGETS
+   ───────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  button,
+  a[role="button"],
+  input[type="submit"],
+  input[type="button"] {
+    min-height: 40px;
+  }
+
+  input[type="checkbox"],
+  input[type="radio"] {
+    min-width: 20px;
+    min-height: 20px;
+  }
+}
+
+/* ─────────────────────────────────────────
+   TABLES — always scroll, never squish
+   ───────────────────────────────────────── */
+
+.table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 12px;
+  width: 100%;
+}
+
+table {
+  min-width: 560px;
+  border-collapse: collapse;
+}
+
+@media (min-width: 1024px) {
+  table {
+    min-width: unset;
+  }
+}
+
+/* ─────────────────────────────────────────
+   CARDS — adaptive padding
+   ───────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  /* Tighten card padding on very small phones */
+  .bg-white.rounded-xl.p-5,
+  .bg-white.rounded-2xl.p-5 {
+    padding: 12px !important;
+  }
+  .bg-white.rounded-xl.p-6,
+  .bg-white.rounded-2xl.p-6 {
+    padding: 14px !important;
+  }
+  .bg-white.rounded-xl.p-8,
+  .bg-white.rounded-2xl.p-8 {
+    padding: 16px !important;
+  }
+}
+
+/* ─────────────────────────────────────────
+   DASHBOARD HEADERS — compact on mobile
+   ───────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  /* Dashboard sticky headers */
+  header.sticky h1 {
+    font-size: 0.875rem;
+    line-height: 1.25;
+  }
+  header.sticky h1 + span {
+    display: none; /* hide badge on mobile */
+  }
+  header.sticky p {
+    font-size: 0.65rem;
+  }
+
+  /* Tab bars */
+  header .flex.gap-1.overflow-x-auto {
+    gap: 2px;
+    padding-bottom: 0;
+  }
+  header .flex.gap-1.overflow-x-auto button {
+    padding: 6px 8px;
+    font-size: 11px;
+    gap: 4px;
+  }
+  header .flex.gap-1.overflow-x-auto button svg {
+    width: 12px;
+    height: 12px;
+  }
+}
+
+/* ─────────────────────────────────────────
+   DASHBOARD SECTION TITLES
+   ───────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  main h2.text-xl {
+    font-size: 1rem;
+  }
+  main h3.font-bold {
+    font-size: 0.875rem;
+  }
+}
+
+/* ─────────────────────────────────────────
+   KPI STAT CARDS
+   ───────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  /* Smaller stat numbers on tiny phones */
+  .text-2xl.font-black {
+    font-size: 1.375rem;
+  }
+  .text-3xl.font-black {
+    font-size: 1.75rem;
+  }
+}
+
+/* ─────────────────────────────────────────
+   MODALS — bottom sheet on mobile
+   ───────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  /* Slide up from bottom */
+  .fixed.inset-0 > div[class*="rounded-2xl"],
+  .fixed.inset-0 > div[class*="rounded-t-2xl"] {
+    border-radius: 20px 20px 0 0 !important;
+    max-height: 92vh;
+    overflow-y: auto;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+  }
+
+  .fixed.inset-0 {
+    align-items: flex-end !important;
+    padding: 0 !important;
+  }
+}
+
+/* ─────────────────────────────────────────
+   NOTIFICATION DROPDOWNS
+   ───────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  /* Prevent overflow */
+  .absolute.right-0 [class*="w-72"],
+  .absolute.right-0 [class*="w-80"] {
+    width: min(288px, calc(100vw - 16px));
+    right: -4px;
+  }
+}
+
+/* ─────────────────────────────────────────
+   RECHARTS — mobile sizing
+   ───────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  .recharts-wrapper text {
+    font-size: 10px !important;
+  }
+  .recharts-legend-item-text {
+    font-size: 10px !important;
+  }
+  .recharts-cartesian-axis-tick-value {
+    font-size: 9px !important;
+  }
+}
+
+/* ─────────────────────────────────────────
+   GRIDS — collapse rules
+   ───────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  /* 2-col → 1-col for action/service grids when very small */
+  .grid.grid-cols-2.sm\:grid-cols-3,
+  .grid.grid-cols-2.sm\:grid-cols-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ─────────────────────────────────────────
+   LANDING PAGE — mobile hero
+   ───────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  /* Tighter hero spacing */
+  section .max-w-6xl {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  /* Reduce section vertical padding */
+  section.py-20 {
+    padding-top: 48px;
+    padding-bottom: 48px;
+  }
+  section.py-16 {
+    padding-top: 40px;
+    padding-bottom: 40px;
+  }
+}
+
+/* ─────────────────────────────────────────
+   LOGIN PAGES — mobile polish
+   ───────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  /* Tighter card padding */
+  .bg-white.rounded-2xl.shadow-xl.p-8 {
+    padding: 20px 16px !important;
+  }
+  .bg-white.rounded-2xl.shadow-xl.p-6 {
+    padding: 16px !important;
+  }
+
+  /* Stack login CTAs */
+  .text-center .flex.gap-4 {
+    flex-direction: column;
+    gap: 8px;
+  }
+}
+
+/* ─────────────────────────────────────────
+   RESIDENT PORTAL — mobile cards
+   ───────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  /* Welcome card */
+  .bg-gradient-to-br.from-emerald-600 .text-2xl {
+    font-size: 1.25rem;
+  }
+
+  /* Immunization table inside accordion */
+  .overflow-x-auto table {
+    font-size: 11px;
+  }
+  .overflow-x-auto table th,
+  .overflow-x-auto table td {
+    padding: 6px 8px;
+  }
+}
+
+/* ─────────────────────────────────────────
+   BHW / STAFF BADGE ROWS — horizontal scroll
+   ───────────────────────────────────────── */
+
+.flex.gap-3.overflow-x-auto.pb-2 {
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.flex.gap-3.overflow-x-auto.pb-2::-webkit-scrollbar {
+  display: none;
+}
+
+/* ─────────────────────────────────────────
+   ACCORDION DETAIL GRIDS — stack on mobile
+   ───────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  .grid.grid-cols-2.sm\:grid-cols-4.gap-3.text-xs {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+  }
+}
+
+/* ─────────────────────────────────────────
+   FILTER/ACTION ROWS — wrap on mobile
+   ───────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  /* Flex rows with search + buttons */
+  .flex.flex-col.sm\:flex-row {
+    gap: 10px;
+  }
+
+  /* Action button row — ensure buttons don't clip */
+  .flex.gap-2 > button,
+  .flex.gap-3 > button {
+    padding-left: 10px;
+    padding-right: 10px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+}
+
+/* ─────────────────────────────────────────
+   BLOOD INVENTORY GRID — 4-col → 2-col
+   ───────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  /* Blood type inventory cards */
+  .grid.grid-cols-2.sm\:grid-cols-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* Inventory card inner values */
+  .text-3xl.font-black.text-gray-900 {
+    font-size: 1.5rem;
+  }
+}
+
+/* ─────────────────────────────────────────
+   STAFF CARD PHOTOS — mobile width
+   ───────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  .grid.sm\:grid-cols-2.lg\:grid-cols-3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ─────────────────────────────────────────
+   ALERT BANNERS — compact on mobile
+   ───────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  .bg-red-50.border.border-red-200,
+  .bg-amber-50.border.border-amber-200,
+  .bg-emerald-50.border.border-emerald-100 {
+    padding: 10px 12px;
+    border-radius: 10px;
+  }
+
+  .bg-red-50.border p.text-sm,
+  .bg-amber-50.border p.text-sm {
+    font-size: 12px;
+  }
+}
+
+/* ─────────────────────────────────────────
+   DROPDOWN / SELECT — full width on mobile
+   ───────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  select {
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%236b7280' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 32px;
+  }
+}
+
+/* ─────────────────────────────────────────
+   RESPONSIVE SPACING SCALE
+   Uses the actual design: 360px → 640px → 1024px → 1440px
+   ───────────────────────────────────────── */
+
+/* 360–480px: very compact */
+@media (max-width: 480px) {
+  main.flex-1 {
+    padding-left: 12px;
+    padding-right: 12px;
+    padding-top: 16px;
+    padding-bottom: 16px;
+  }
+
+  .space-y-5 > * + * { margin-top: 12px; }
+  .space-y-4 > * + * { margin-top: 10px; }
+  .space-y-3 > * + * { margin-top: 8px; }
+}
+
+/* 480–640px: slightly more room */
+@media (min-width: 481px) and (max-width: 640px) {
+  main.flex-1 {
+    padding-left: 16px;
+    padding-right: 16px;
+    padding-top: 20px;
+  }
+}
+
+/* 640px+: restore to designed spacing */
+@media (min-width: 640px) {
+  main.flex-1 {
+    padding-left: 20px;
+    padding-right: 20px;
+    padding-top: 24px;
+  }
+}
+
+/* ─────────────────────────────────────────
+   SECTION HEADERS WITH ACTIONS
+   ───────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  /* Section header rows — stack title and buttons */
+  .flex.items-center.justify-between > h2 {
+    font-size: 1rem;
+  }
+
+  /* Action buttons in section headers — smaller */
+  .flex.items-center.justify-between > button,
+  .flex.items-center.justify-between > .flex.gap-2 > button {
+    font-size: 11px;
+    padding: 6px 10px;
+  }
+
+  .flex.items-start.sm\:items-center.justify-between {
+    flex-direction: column;
+    gap: 10px;
+    align-items: flex-start !important;
+  }
+}
+
+/* ─────────────────────────────────────────
+   OVERALL MAX-WIDTH CONTAINER
+   ───────────────────────────────────────── */
+
+@media (min-width: 1280px) {
+  main .max-w-6xl,
+  main .max-w-5xl,
+  main .max-w-4xl {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+}
+
+@media (min-width: 1440px) {
+  /* Ensure content doesn't go edge-to-edge on ultrawide */
+  body > div {
+    max-width: 1440px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
