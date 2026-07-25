@@ -9,3 +9,13 @@
 [2026-07-25 02:26:55] TO: bascoguinchedric20@gmail.com | CODE: 253313 | SUBJECT: RedPulse RHU - Your 2-Factor Authentication (2FA) Code
 [2026-07-25 02:28:27] TO: bascoguinchedric20@gmail.com | CODE: 688061 | SUBJECT: RedPulse RHU - Your 2-Factor Authentication (2FA) Code
 [2026-07-25 02:54:12] TO: bascoguinchedric20@gmail.com | CODE: 899244 | SUBJECT: RedPulse RHU - Your 2-Factor Authentication (2FA) Code
+[2026-07-25 14:42:01] TO: clintonjohnvmasongsong15@gmail.com | CODE: 926364 | SUBJECT: RedPulse RHU - Your 2-Factor Authentication (2FA) Code
+[2026-07-25 14:45:12] TO: clintonjohnvmasongsong15@gmail.com | CODE: 660992 | SUBJECT: RedPulse RHU - Your 2-Factor Authentication (2FA) Code
+[2026-07-25 14:59:56] TO: 23-75584@g.batstate-u.edu.ph | CODE: 538069 | SUBJECT: RedPulse RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (FormSubmit)
+[2026-07-25 15:37:54] TO: 23-75584@g.batstate-u.edu.ph | CODE: 176679 | SUBJECT: RedPulse RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (FormSubmit)
+[2026-07-25 16:42:25] TO: 23-75584@g.batstate-u.edu.ph | CODE: 597763 | SUBJECT: RedPulse RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (FormSubmit)
+[2026-07-25 17:42:30] TO: 23-75584@g.batstate-u.edu.ph | CODE: 469521 | SUBJECT: RedPulse RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (FormSubmit)
+[2026-07-25 17:54:38] TO: 23-75584@g.batstate-u.edu.ph | SUBJECT: RedPulse RHU - Email Delivery Test | FAILED (SMTP connection failed (10013).)
+[2026-07-25 17:54:55] TO: 23-75584@g.batstate-u.edu.ph | SUBJECT: RedPulse RHU - Email Delivery Test | SUCCESS (SMTP)
+[2026-07-25 17:56:35] TO: 23-75584@g.batstate-u.edu.ph | SUBJECT: RedPulse RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (SMTP)
+[2026-07-25 17:56:41] TO: 23-75584@g.batstate-u.edu.ph | SUBJECT: RedPulse RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (SMTP)

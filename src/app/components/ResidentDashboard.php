@@ -34,6 +34,7 @@ $contactErrors = [];
 $certificateErrors = [];
 
 $residentMessages = [];
+$portalEvents = [];
 
 if (!empty($pdo)) {
     try {
@@ -97,6 +98,21 @@ if (!empty($pdo)) {
                     $_SESSION['resident_dashboard_message_flash'] = 'OPD Consultation Appointment request submitted to RHU Staff & Attending Physician.';
                     header('Location: ResidentDashboard.php?tab=records');
                     exit;
+                } elseif ($formType === 'event_registration') {
+                    $eventId = (int)($_POST['event_id'] ?? 0);
+                    $eventCheck = $pdo->prepare("SELECT id FROM portal_events WHERE id = :id AND status = 'Scheduled' AND scheduled_date >= CURDATE()");
+                    $eventCheck->execute(['id' => $eventId]);
+                    if ($eventCheck->fetchColumn()) {
+                        $ins = $pdo->prepare(
+                            "INSERT INTO event_registrations (event_id, resident_id, status)
+                             VALUES (:event_id, :resident_id, 'Pending')
+                             ON DUPLICATE KEY UPDATE status = VALUES(status)"
+                        );
+                        $ins->execute(['event_id' => $eventId, 'resident_id' => $residentId]);
+                        $_SESSION['resident_dashboard_message_flash'] = 'Your event registration was submitted for RHU confirmation.';
+                    }
+                    header('Location: ResidentDashboard.php?tab=events');
+                    exit;
                 }
             }
 
@@ -138,6 +154,16 @@ if (!empty($pdo)) {
             $statement = $pdo->prepare('SELECT * FROM messages WHERE resident_id = :resident_id ORDER BY id DESC');
             $statement->execute(['resident_id' => $residentId]);
             $residentMessages = $statement->fetchAll(PDO::FETCH_ASSOC);
+
+            $statement = $pdo->prepare(
+                "SELECT pe.*, er.status AS registration_status
+                 FROM portal_events pe
+                 LEFT JOIN event_registrations er ON er.event_id = pe.id AND er.resident_id = :resident_id
+                 WHERE pe.status = 'Scheduled' AND pe.scheduled_date >= CURDATE()
+                 ORDER BY pe.scheduled_date, pe.start_time"
+            );
+            $statement->execute(['resident_id' => $residentId]);
+            $portalEvents = $statement->fetchAll(PDO::FETCH_ASSOC);
         }
     } catch (Exception $ex) {
         error_log("ResidentDashboard DB Hydration Error: " . $ex->getMessage());
@@ -260,7 +286,31 @@ $dotClasses = ['red' => 'bg-red-500', 'pink' => 'bg-pink-500', 'blue' => 'bg-blu
 
     <section data-tab-panel="certificates" class="hidden space-y-4 sm:space-y-5"><div class="flex flex-wrap items-center justify-between gap-2"><h2 class="text-base font-bold text-gray-900 sm:text-xl">▧ My Certificates</h2><button type="button" data-scroll-to="certificate-request" class="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700">+ Request New</button></div><?php if ($certificateSuccess): ?><div class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700"><?= esc($certificateSuccess) ?></div><?php endif; ?><?php if ($certificateErrors): ?><div class="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"><?php foreach ($certificateErrors as $error): ?><p><?= esc($error) ?></p><?php endforeach; ?></div><?php endif; ?><?php if (!$certificates): ?><div class="rounded-xl border border-gray-100 bg-white p-5 text-center text-gray-500 shadow-sm">No certificate records are available yet for this account.</div><?php else: ?><div class="space-y-3"><?php foreach ($certificates as $certificate): ?><div class="flex items-center justify-between rounded-xl border border-gray-100 bg-white p-4 shadow-sm"><div><p class="font-bold text-gray-900"><?= esc($certificate['certificate_type_name'] ?? 'Health Certificate') ?></p><p class="text-xs text-gray-500">Issued <?= esc($certificate['issue_date']) ?> · <?= esc($certificate['certificate_number'] ?? 'Pending number') ?></p></div><span class="rounded-full bg-green-100 px-2 py-1 text-xs font-bold text-green-700"><?= esc($certificate['validity_status'] ?? 'Issued') ?></span></div><?php endforeach; ?></div><?php endif; ?><div id="certificate-request" class="rounded-xl border border-gray-200 bg-gray-50 p-4"><p class="mb-2 text-sm font-bold text-gray-700">Request a Certificate</p><form method="post" action="ResidentDashboard.php?tab=certificates" class="grid grid-cols-2 gap-2 text-xs" id="certificate-request-form"><input type="hidden" name="form" value="certificate_request"><?php foreach (['Medical Certificate (₱50)','Health Certificate (₱100)','Barangay Health Cert (₱100)','Certificate of Live Birth (FREE)'] as $certificateType): ?><button type="submit" name="certificate_type" value="<?= esc($certificateType) ?>" class="rounded-lg border border-gray-200 bg-white p-2.5 text-left font-semibold text-gray-700 hover:border-green-400 hover:bg-green-50"><?= esc($certificateType) ?></button><?php endforeach; ?></form></div></section>
 
-    <section data-tab-panel="events" class="hidden space-y-4 sm:space-y-5"><h2 class="text-base font-bold text-gray-900 sm:text-xl">▣ RHU Events &amp; Health Programs</h2><div class="flex gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">ⓘ<p>All events are <strong>FREE</strong> for registered residents of Nasugbu. Bring a valid ID and your PhilHealth card.</p></div><div class="space-y-3"><?php foreach ($events as [$date, $title, $detail, $color]): ?><article class="flex items-start gap-4 rounded-xl border p-4 <?= $eventClasses[$color] ?>"><span class="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full <?= $dotClasses[$color] ?>"></span><div class="flex-1"><div class="flex flex-wrap items-center gap-2"><span class="rounded border border-gray-200 bg-white px-2 py-0.5 font-mono text-xs text-gray-500"><?= esc($date) ?></span><span class="text-sm font-bold text-gray-900"><?= esc($title) ?></span></div><p class="mt-1 text-xs text-gray-600"><?= esc($detail) ?></p></div><button type="button" data-event-action="true" data-event-title="<?= esc($title) ?>" data-event-date="<?= esc($date) ?>" class="text-xs font-semibold text-gray-500">→</button></article><?php endforeach; ?></div><div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5"><h3 class="mb-3 font-bold text-gray-900">Standing Programs (Monthly)</h3><div class="space-y-2 text-sm"><?php foreach ([['OPD Consultations','Mon–Fri, 8AM–5PM','RHU Main'],['Pre-natal Check-up','Mon & Wed, 8AM–12NN','RHU Lying-in'],['Family Planning','Every Tuesday, 8AM–12NN','RHU Main'],['TB-DOTS Drug Collection','Daily, 8AM–5PM','RHU DOTS Corner'],['Nutrition Counseling','Every Thursday','RHU Nutrition Unit'],['Child Immunization','Wed & Fri, 8AM–12NN','RHU EPI Room'],['Senior Citizen Clinic','1st Monday/month','RHU Main']] as [$program, $schedule, $location]): ?><div class="flex gap-3 border-b border-gray-50 py-2 last:border-0"><span class="mt-1.5 h-2 w-2 rounded-full bg-emerald-500"></span><div><p class="font-semibold text-gray-800"><?= esc($program) ?></p><p class="text-xs text-gray-500"><?= esc($schedule) ?> · <?= esc($location) ?></p></div></div><?php endforeach; ?></div></div></section>
+    <section data-tab-panel="events" class="hidden space-y-4 sm:space-y-5">
+      <h2 class="text-base font-bold text-gray-900 sm:text-xl">RHU Events &amp; Health Programs</h2>
+      <div class="flex gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700"><p>All events are <strong>FREE</strong> for registered residents of Nasugbu. Bring a valid ID and your PhilHealth card.</p></div>
+      <div class="space-y-3">
+        <?php if (!$portalEvents): ?><p class="rounded-xl bg-white p-5 text-center text-sm text-gray-500">No upcoming events are currently scheduled.</p><?php endif; ?>
+        <?php foreach ($portalEvents as $event): ?>
+          <article class="flex items-start gap-4 rounded-xl border border-indigo-200 bg-indigo-50 p-4">
+            <span class="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-indigo-500"></span>
+            <div class="flex-1">
+              <div class="flex flex-wrap items-center gap-2"><span class="rounded border border-gray-200 bg-white px-2 py-0.5 font-mono text-xs text-gray-500"><?= esc($event['event_date']) ?></span><span class="text-sm font-bold text-gray-900"><?= esc($event['title']) ?></span></div>
+              <p class="mt-1 text-xs text-gray-600"><?= esc($event['description'] ?? '') ?> · <?= esc($event['venue']) ?></p>
+            </div>
+            <?php if (!empty($event['registration_status'])): ?>
+              <span class="rounded-full bg-white px-3 py-1 text-xs font-bold text-indigo-700"><?= esc($event['registration_status']) ?></span>
+            <?php else: ?>
+              <form method="post" action="ResidentDashboard.php?tab=events">
+                <input type="hidden" name="form" value="event_registration">
+                <input type="hidden" name="event_id" value="<?= (int)$event['id'] ?>">
+                <button class="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white">Register</button>
+              </form>
+            <?php endif; ?>
+          </article>
+        <?php endforeach; ?>
+      </div>
+    </section>
 
     <section data-tab-panel="contact" class="hidden space-y-4 sm:space-y-5"><h2 class="text-base font-bold text-gray-900 sm:text-xl">☎ Contact the RHU</h2><div class="space-y-3 rounded-xl border border-gray-100 bg-white p-5 shadow-sm sm:space-y-4"><h3 class="font-bold text-gray-900">Nasugbu Rural Health Unit I</h3><?php foreach ([['⌖','Address','Poblacion, Nasugbu, Batangas'],['☎','Contact','(043) 416-1234'],['◷','Hours','Mon–Fri: 8:00 AM – 5:00 PM'],['♙','Municipal Health Officer','Dr. Chedric Bascoguin']] as [$icon, $label, $value]): ?><div class="flex gap-3"><span class="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-50 text-teal-600"><?= esc($icon) ?></span><div><p class="text-xs font-semibold uppercase tracking-wide text-gray-500"><?= esc($label) ?></p><p class="mt-0.5 text-sm font-medium text-gray-800"><?= esc($value) ?></p></div></div><?php endforeach; ?></div><div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm"><h3 class="mb-3 font-bold text-gray-900">Send a Message to RHU Staff</h3><?php if ($contactSuccess): ?><div class="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700"><?= esc($contactSuccess) ?></div><?php endif; ?><?php if ($contactErrors): ?><div class="mb-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"><?php foreach ($contactErrors as $error): ?><p><?= esc($error) ?></p><?php endforeach; ?></div><?php endif; ?><form method="post" action="ResidentDashboard.php?tab=contact" class="space-y-3"><input type="hidden" name="form" value="contact"><label class="block text-xs font-semibold uppercase tracking-wide text-gray-500">Message Type</label><select name="subject" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm"><option value="General Inquiry">General Inquiry</option><option value="Appointment Request">Appointment Request</option><option value="Certificate Request">Certificate Request</option><option value="Health Concern">Health Concern</option><option value="Feedback / Complaint">Feedback / Complaint</option></select><label class="block text-xs font-semibold uppercase tracking-wide text-gray-500">Message</label><textarea name="message" rows="4" class="w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm" placeholder="Type your message here..."></textarea><button type="submit" class="w-full rounded-lg bg-teal-600 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 shadow-md">Send Message to RHU Staff</button></form></div>
 

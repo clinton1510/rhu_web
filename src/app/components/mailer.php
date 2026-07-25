@@ -1,37 +1,44 @@
 <?php
 // Shared Mailer module for RedPulse RHU.
-// Uses HTTPS Mail API (FormSubmit HTTPS relay) for guaranteed real-world email delivery on local XAMPP environments,
-// as well as direct SMTP socket transport and PHP mail().
+// Uses authenticated SMTP as the primary delivery method.
 
 if (!function_exists('sendRHUEmail')) {
     function sendRHUEmail(string $toEmail, string $subject, string $htmlContent): array {
         @include_once __DIR__ . '/db.php';
 
-        $smtpHost = function_exists('rhuEnv') ? rhuEnv('SMTP_HOST', 'smtp.gmail.com') : 'smtp.gmail.com';
-        $smtpPort = function_exists('rhuEnv') ? (int) rhuEnv('SMTP_PORT', '587') : 587;
-        $smtpUser = function_exists('rhuEnv') ? (rhuEnv('SMTP_USER', '') ?: '') : '';
+        $mailSettings = [];
+        if (isset($pdo) && $pdo instanceof PDO) {
+            try {
+                $mailSettings = $pdo->query("SELECT setting_key, setting_value FROM portal_settings WHERE setting_key LIKE 'smtp_%'")
+                    ->fetchAll(PDO::FETCH_KEY_PAIR) ?: [];
+            } catch (Throwable $e) {
+                error_log('Mailer settings: ' . $e->getMessage());
+            }
+        }
+        $smtpHost = trim((string)($mailSettings['smtp_host'] ?? '')) ?: (function_exists('rhuEnv') ? rhuEnv('SMTP_HOST', 'smtp.gmail.com') : 'smtp.gmail.com');
+        $smtpPort = (int)(trim((string)($mailSettings['smtp_port'] ?? '')) ?: (function_exists('rhuEnv') ? rhuEnv('SMTP_PORT', '587') : 587));
+        $smtpUser = trim((string)($mailSettings['smtp_user'] ?? '')) ?: (function_exists('rhuEnv') ? (rhuEnv('SMTP_USER', '') ?: '') : '');
         $smtpPass = function_exists('rhuEnv') ? (rhuEnv('SMTP_PASS', '') ?: rhuEnv('SMTP_PASSWORD', '')) : '';
         $smtpPass = str_replace(' ', '', $smtpPass);
         $smtpFrom = function_exists('rhuEnv') ? (rhuEnv('SMTP_FROM', '') ?: ($smtpUser ?: 'no-reply@nasugbu.rhu.gov.ph')) : 'no-reply@nasugbu.rhu.gov.ph';
         $smtpName = 'RedPulse RHU Security';
 
-        // Extract raw code if present
-        preg_match('/class=[\'"]code-box[\'"]>([0-9]{6})</', $htmlContent, $codeMatches);
-        $rawCode = $codeMatches[1] ?? '';
+        if (!filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
+            return ['success' => false, 'method' => 'validation', 'error' => 'Invalid recipient email address.'];
+        }
 
-        // Log locally to sent_emails.txt for record keeping
         $logPath = dirname(__DIR__, 2) . '/sent_emails.txt';
-        $logEntry = "[" . date('Y-m-d H:i:s') . "] TO: {$toEmail} | CODE: {$rawCode} | SUBJECT: {$subject}\n";
-        @file_put_contents($logPath, $logEntry, FILE_APPEND);
+        $safeSubject = trim(str_replace(["\r", "\n"], '', $subject));
+        $logPrefix = "[" . date('Y-m-d H:i:s') . "] TO: {$toEmail} | SUBJECT: {$safeSubject} | ";
 
-        // 1. Direct SMTP Socket Delivery (If SMTP_USER & SMTP_PASS are set in .env)
         if ($smtpUser !== '' && $smtpPass !== '') {
             try {
                 $context = stream_context_create([
                     'ssl' => [
-                        'verify_peer' => false,
-                        'verify_peer_name' => false,
-                        'allow_self_signed' => true
+                        'verify_peer' => true,
+                        'verify_peer_name' => true,
+                        'allow_self_signed' => false,
+                        'peer_name' => $smtpHost,
                     ]
                 ]);
 
@@ -53,83 +60,60 @@ if (!function_exists('sendRHUEmail')) {
                         return $read($sock);
                     };
 
-                    $read($socket);
-                    $write($socket, 'EHLO ' . gethostname());
+                    $expect = function(string $response, array $codes, string $stage): void {
+                        $code = (int)substr($response, 0, 3);
+                        if (!in_array($code, $codes, true)) {
+                            throw new RuntimeException("SMTP {$stage} failed with response code {$code}.");
+                        }
+                    };
+
+                    $expect($read($socket), [220], 'connection');
+                    $expect($write($socket, 'EHLO localhost'), [250], 'EHLO');
 
                     if ($smtpPort === 587) {
-                        $write($socket, 'STARTTLS');
-                        stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT);
-                        $write($socket, 'EHLO ' . gethostname());
+                        $expect($write($socket, 'STARTTLS'), [220], 'STARTTLS');
+                        if (!stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
+                            throw new RuntimeException('SMTP TLS negotiation failed.');
+                        }
+                        $expect($write($socket, 'EHLO localhost'), [250], 'secure EHLO');
                     }
 
-                    $write($socket, 'AUTH LOGIN');
-                    $write($socket, base64_encode($smtpUser));
-                    $write($socket, base64_encode($smtpPass));
+                    $expect($write($socket, 'AUTH LOGIN'), [334], 'authentication');
+                    $expect($write($socket, base64_encode($smtpUser)), [334], 'username');
+                    $expect($write($socket, base64_encode($smtpPass)), [235], 'password');
 
-                    $write($socket, "MAIL FROM: <{$smtpFrom}>");
-                    $write($socket, "RCPT TO: <{$toEmail}>");
-                    $write($socket, 'DATA');
+                    $expect($write($socket, "MAIL FROM: <{$smtpFrom}>"), [250], 'sender');
+                    $expect($write($socket, "RCPT TO: <{$toEmail}>"), [250, 251], 'recipient');
+                    $expect($write($socket, 'DATA'), [354], 'message data');
 
                     $headers  = "MIME-Version: 1.0\r\n";
                     $headers .= "Content-Type: text/html; charset=UTF-8\r\n";
                     $headers .= "From: {$smtpName} <{$smtpFrom}>\r\n";
                     $headers .= "To: <{$toEmail}>\r\n";
-                    $headers .= "Subject: {$subject}\r\n";
+                    $headers .= "Subject: {$safeSubject}\r\n";
                     $headers .= "Date: " . date('r') . "\r\n";
+                    $headers .= "Message-ID: <" . bin2hex(random_bytes(12)) . "@redpulse-rhu.local>\r\n";
 
-                    $write($socket, $headers . "\r\n" . $htmlContent . "\r\n.");
+                    $dotSafeHtml = preg_replace('/(?m)^\\./', '..', $htmlContent);
+                    $expect($write($socket, $headers . "\r\n" . $dotSafeHtml . "\r\n."), [250], 'delivery');
                     $write($socket, 'QUIT');
                     fclose($socket);
 
+                    @file_put_contents($logPath, $logPrefix . "SUCCESS (SMTP)\n", FILE_APPEND);
                     return ['success' => true, 'method' => 'SMTP'];
                 }
-            } catch (Exception $e) {
+                $message = "SMTP connection failed ({$errno}).";
+                @file_put_contents($logPath, $logPrefix . "FAILED ({$message})\n", FILE_APPEND);
+                return ['success' => false, 'method' => 'SMTP', 'error' => $message];
+            } catch (Throwable $e) {
                 error_log('sendRHUEmail SMTP Exception: ' . $e->getMessage());
+                @file_put_contents($logPath, $logPrefix . "FAILED (" . $e->getMessage() . ")\n", FILE_APPEND);
+                return ['success' => false, 'method' => 'SMTP', 'error' => $e->getMessage()];
             }
         }
 
-        // 2. HTTPS Web Mail API Relay (FormSubmit HTTPS endpoint) for Instant Real-World Inbox Delivery
-        if (function_exists('curl_init') && filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
-            try {
-                $apiUrl = 'https://formsubmit.co/ajax/' . urlencode($toEmail);
-                $postFields = [
-                    '_subject' => $subject,
-                    'System_Sender' => 'RedPulse RHU Administrator Security',
-                    'Recipient' => $toEmail,
-                    '2FA_Verification_Code' => $rawCode ?: 'Generated Code',
-                    'Message' => "Your 2-Factor Authentication (2FA) verification code for RedPulse RHU Admin Login is: {$rawCode}. Valid for 10 minutes.",
-                    '_template' => 'table'
-                ];
-
-                $ch = curl_init();
-                curl_setopt($ch, CURLOPT_URL, $apiUrl);
-                curl_setopt($ch, CURLOPT_POST, true);
-                curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($postFields));
-                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-                curl_setopt($ch, CURLOPT_TIMEOUT, 8);
-                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-                curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-
-                $response = curl_exec($ch);
-                $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                curl_close($ch);
-
-                if ($httpCode >= 200 && $httpCode < 300) {
-                    return ['success' => true, 'method' => 'HTTPS_API'];
-                }
-            } catch (Exception $ex) {
-                error_log('sendRHUEmail HTTP API Error: ' . $ex->getMessage());
-            }
-        }
-
-        // 3. Native PHP mail() fallback
-        $headers  = "MIME-Version: 1.0\r\n";
-        $headers .= "Content-type: text/html; charset=UTF-8\r\n";
-        $headers .= "From: {$smtpName} <{$smtpFrom}>\r\n";
-        $headers .= "Reply-To: {$smtpFrom}\r\n";
-        $headers .= "X-Mailer: PHP/" . phpversion();
-
-        $sent = @mail($toEmail, $subject, $htmlContent, $headers);
-        return ['success' => $sent, 'method' => 'php_mail'];
+        $message = 'SMTP credentials are not configured.';
+        @file_put_contents($logPath, $logPrefix . "FAILED ({$message})\n", FILE_APPEND);
+        return ['success' => false, 'method' => 'SMTP', 'error' => $message];
     }
 }
