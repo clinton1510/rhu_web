@@ -33,40 +33,7 @@ unset($_SESSION['resident_dashboard_message_flash'], $_SESSION['resident_dashboa
 $contactErrors = [];
 $certificateErrors = [];
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $formType = $_POST['form'] ?? '';
-    if ($formType === 'contact') {
-        $subject = trim($_POST['subject'] ?? 'General Inquiry');
-        $message = trim($_POST['message'] ?? '');
-        if ($message === '') {
-            $contactErrors[] = 'Please type your message before sending.';
-        } else {
-            $_SESSION['resident_dashboard_message_flash'] = 'Your message has been sent to the RHU. We will respond within 24 hours.';
-            $_SESSION['resident_dashboard_messages'][] = [
-                'resident_id' => $user['resident_id'] ?? null,
-                'subject' => $subject,
-                'message' => $message,
-                'sent_at' => date('c'),
-            ];
-            header('Location: ResidentDashboard.php?tab=contact');
-            exit;
-        }
-    } elseif ($formType === 'certificate_request') {
-        $certificateType = trim($_POST['certificate_type'] ?? '');
-        if ($certificateType === '') {
-            $certificateErrors[] = 'Please choose a certificate to request.';
-        } else {
-            $_SESSION['resident_dashboard_certificate_flash'] = "Request submitted for {$certificateType}. Please wait for RHU staff confirmation.";
-            $_SESSION['resident_dashboard_certificate_requests'][] = [
-                'resident_id' => $user['resident_id'] ?? null,
-                'certificate_type' => $certificateType,
-                'requested_at' => date('c'),
-            ];
-            header('Location: ResidentDashboard.php?tab=certificates');
-            exit;
-        }
-    }
-}
+$residentMessages = [];
 
 if (!empty($pdo)) {
     try {
@@ -80,20 +47,70 @@ if (!empty($pdo)) {
             $statement->execute(['email' => $user['email']]);
             $resident = $statement->fetch();
         }
+        if (!$resident && !empty($user['id'])) {
+            $statement = $pdo->prepare('SELECT * FROM residents WHERE user_id = :uid LIMIT 1');
+            $statement->execute(['uid' => $user['id']]);
+            $resident = $statement->fetch();
+        }
 
         if ($resident) {
             $residentId = (int)$resident['id'];
+
+            // 1. Process POST submissions directly into MySQL database
+            if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+                $formType = $_POST['form'] ?? '';
+                if ($formType === 'contact') {
+                    $subject = trim($_POST['subject'] ?? 'General Inquiry');
+                    $message = trim($_POST['message'] ?? '');
+                    if ($message === '') {
+                        $contactErrors[] = 'Please type your message before sending.';
+                    } else {
+                        $ins = $pdo->prepare("INSERT INTO messages (resident_id, subject, message, status, created_at) VALUES (:res, :subj, :msg, 'Pending', NOW())");
+                        $ins->execute(['res' => $residentId, 'subj' => $subject, 'msg' => $message]);
+                        $_SESSION['resident_dashboard_message_flash'] = 'Your message has been sent directly to the RHU Staff & Admin. We will respond shortly.';
+                        header('Location: ResidentDashboard.php?tab=contact');
+                        exit;
+                    }
+                } elseif ($formType === 'certificate_request') {
+                    $certificateType = trim($_POST['certificate_type'] ?? '');
+                    if ($certificateType === '') {
+                        $certificateErrors[] = 'Please choose a certificate to request.';
+                    } else {
+                        $certTypeId = 1;
+                        $ctStmt = $pdo->prepare("SELECT id FROM certificate_types WHERE certificate_type_name LIKE :name LIMIT 1");
+                        $ctStmt->execute(['name' => '%' . explode(' ', $certificateType)[0] . '%']);
+                        if ($fId = $ctStmt->fetchColumn()) {
+                            $certTypeId = (int)$fId;
+                        }
+                        $certNo = 'REQ-' . $residentId . '-' . rand(1000, 9999);
+                        $ins = $pdo->prepare("INSERT INTO health_certificates (resident_id, certificate_type_id, certificate_number, issue_date, expiry_date, purpose, validity_status, created_at) VALUES (:res, :type, :cno, CURDATE(), DATE_ADD(CURDATE(), INTERVAL 6 MONTH), :purp, 'Pending', NOW())");
+                        $ins->execute(['res' => $residentId, 'type' => $certTypeId, 'cno' => $certNo, 'purp' => "Portal Request: {$certificateType}"]);
+                        $_SESSION['resident_dashboard_certificate_flash'] = "Request for {$certificateType} submitted to RHU Staff & Admin for processing.";
+                        header('Location: ResidentDashboard.php?tab=certificates');
+                        exit;
+                    }
+                } elseif ($formType === 'appointment_request') {
+                    $chiefComplaint = trim($_POST['chief_complaint'] ?? 'Primary Health Checkup');
+                    $preferredDate = trim($_POST['preferred_date'] ?? date('Y-m-d'));
+                    $ins = $pdo->prepare("INSERT INTO consultations (resident_id, physician_id, consultation_date, consultation_time, chief_complaint, diagnosis, consultation_notes, created_at) VALUES (:res, 1, :cdate, CURTIME(), :chief, 'Pending OPD Triage', 'Online Appointment Request from Resident Portal', NOW())");
+                    $ins->execute(['res' => $residentId, 'cdate' => $preferredDate, 'chief' => $chiefComplaint]);
+                    $_SESSION['resident_dashboard_message_flash'] = 'OPD Consultation Appointment request submitted to RHU Staff & Attending Physician.';
+                    header('Location: ResidentDashboard.php?tab=records');
+                    exit;
+                }
+            }
+
+            // 2. Fetch live data for current resident
             $statement = $pdo->prepare(
                 'SELECT c.*, CONCAT_WS(" ", u.first_name, u.last_name) AS physician_name
                  FROM consultations c
-                 LEFT JOIN physician p ON c.physician_id = p.id
-                 LEFT JOIN staff s ON p.staff_id = s.id
+                 LEFT JOIN staff s ON c.physician_id = s.id
                  LEFT JOIN users u ON s.user_id = u.id
                  WHERE c.resident_id = :resident_id
                  ORDER BY c.consultation_date DESC, c.id DESC'
             );
             $statement->execute(['resident_id' => $residentId]);
-            $consultations = $statement->fetchAll();
+            $consultations = $statement->fetchAll(PDO::FETCH_ASSOC);
 
             $statement = $pdo->prepare(
                 'SELECT vr.*, COALESCE(i.vaccine_name, CONCAT("Vaccine record #", vr.vaccine_id)) AS vaccine_name,
@@ -106,58 +123,62 @@ if (!empty($pdo)) {
                  ORDER BY vr.vaccination_date DESC, vr.id DESC'
             );
             $statement->execute(['resident_id' => $residentId]);
-            $vaccinationRecords = $statement->fetchAll();
+            $vaccinationRecords = $statement->fetchAll(PDO::FETCH_ASSOC);
 
             $statement = $pdo->prepare(
-                'SELECT hc.*, ct.certificate_type_name
+                'SELECT hc.*, COALESCE(ct.certificate_type_name, "Health Certificate") as certificate_type_name
                  FROM health_certificates hc
                  LEFT JOIN certificate_types ct ON hc.certificate_type_id = ct.id
                  WHERE hc.resident_id = :resident_id
-                 ORDER BY hc.issue_date DESC, hc.id DESC'
+                 ORDER BY hc.id DESC'
             );
             $statement->execute(['resident_id' => $residentId]);
-            $certificates = $statement->fetchAll();
+            $certificates = $statement->fetchAll(PDO::FETCH_ASSOC);
 
-            if (isset($_GET['download']) && ctype_digit((string) $_GET['download'])) {
-                $downloadId = (int) $_GET['download'];
-                foreach ($consultations as $consultation) {
-                    if ((int) $consultation['id'] === $downloadId) {
-                        $filename = 'consultation-' . $downloadId . '.txt';
-                        header('Content-Type: text/plain; charset=UTF-8');
-                        header('Content-Disposition: attachment; filename="' . basename($filename) . '"');
-                        echo "Consultation Summary\n";
-                        echo "Patient: " . ($resident['first_name'] ?? 'Resident') . " " . ($resident['last_name'] ?? '') . "\n";
-                        echo "Date: " . ($consultation['consultation_date'] ?? 'N/A') . "\n";
-                        echo "Physician: " . ($consultation['physician_name'] ?? 'N/A') . "\n";
-                        echo "Diagnosis: " . ($consultation['diagnosis'] ?? 'N/A') . "\n\n";
-                        echo "Medications: " . ($consultation['medications_prescribed'] ?? 'None') . "\n";
-                        echo "Notes: " . ($consultation['treatment_plan'] ?? 'No additional notes.') . "\n";
-                        exit;
-                    }
-                }
-            }
-            if (isset($_GET['download_immunization'])) {
-                $filename = 'immunization-card-' . ($resident['id'] ?? 'resident') . '.txt';
+            $statement = $pdo->prepare('SELECT * FROM messages WHERE resident_id = :resident_id ORDER BY id DESC');
+            $statement->execute(['resident_id' => $residentId]);
+            $residentMessages = $statement->fetchAll(PDO::FETCH_ASSOC);
+        }
+    } catch (Exception $ex) {
+        error_log("ResidentDashboard DB Hydration Error: " . $ex->getMessage());
+    }
+}
+if ($resident) {
+    if (isset($_GET['download']) && ctype_digit((string) $_GET['download'])) {
+        $downloadId = (int) $_GET['download'];
+        foreach ($consultations as $consultation) {
+            if ((int) $consultation['id'] === $downloadId) {
+                $filename = 'consultation-' . $downloadId . '.txt';
                 header('Content-Type: text/plain; charset=UTF-8');
                 header('Content-Disposition: attachment; filename="' . basename($filename) . '"');
-                echo "Immunization Card\n";
-                echo "Resident: " . ($resident['first_name'] ?? 'Resident') . " " . ($resident['last_name'] ?? '') . "\n";
-                echo "PhilHealth No.: " . ($resident['philhealth_id'] ?? 'N/A') . "\n\n";
-                foreach ($vaccinationRecords as $record) {
-                    echo "Vaccine: " . ($record['vaccine_name'] ?? 'Unknown') . "\n";
-                    echo "Date: " . ($record['vaccination_date'] ?? 'N/A') . "\n";
-                    echo "Provider: " . ($record['provider_name'] ?? 'N/A') . "\n";
-                    if (!empty($record['next_dose_date'])) {
-                        echo "Next Dose Due: " . $record['next_dose_date'] . "\n";
-                    }
-                    echo "---\n";
-                }
+                echo "Consultation Summary\n";
+                echo "Patient: " . ($resident['first_name'] ?? 'Resident') . " " . ($resident['last_name'] ?? '') . "\n";
+                echo "Date: " . ($consultation['consultation_date'] ?? 'N/A') . "\n";
+                echo "Physician: " . ($consultation['physician_name'] ?? 'N/A') . "\n";
+                echo "Diagnosis: " . ($consultation['diagnosis'] ?? 'N/A') . "\n\n";
+                echo "Medications: " . ($consultation['medications_prescribed'] ?? 'None') . "\n";
+                echo "Notes: " . ($consultation['treatment_plan'] ?? 'No additional notes.') . "\n";
                 exit;
             }
         }
-    } catch (Exception $e) {
-        error_log('ResidentDashboard: data load failed: ' . $e->getMessage());
-        $loadError = 'Some health records could not be loaded. Please try again later.';
+    }
+    if (isset($_GET['download_immunization'])) {
+        $filename = 'immunization-card-' . ($resident['id'] ?? 'resident') . '.txt';
+        header('Content-Type: text/plain; charset=UTF-8');
+        header('Content-Disposition: attachment; filename="' . basename($filename) . '"');
+        echo "Immunization Card\n";
+        echo "Resident: " . ($resident['first_name'] ?? 'Resident') . " " . ($resident['last_name'] ?? '') . "\n";
+        echo "PhilHealth No.: " . ($resident['philhealth_id'] ?? 'N/A') . "\n\n";
+        foreach ($vaccinationRecords as $record) {
+            echo "Vaccine: " . ($record['vaccine_name'] ?? 'Unknown') . "\n";
+            echo "Date: " . ($record['vaccination_date'] ?? 'N/A') . "\n";
+            echo "Provider: " . ($record['provider_name'] ?? 'N/A') . "\n";
+            if (!empty($record['next_dose_date'])) {
+                echo "Next Dose Due: " . $record['next_dose_date'] . "\n";
+            }
+            echo "---\n";
+        }
+        exit;
     }
 }
 
@@ -216,7 +237,24 @@ $dotClasses = ['red' => 'bg-red-500', 'pink' => 'bg-pink-500', 'blue' => 'bg-blu
       <div><h3 class="mb-3 font-bold text-gray-900">★ Health Tips</h3><div class="space-y-3"><div class="flex gap-3 rounded-xl bg-red-50 p-4 text-red-700">♥<p class="text-sm">Monitor your blood pressure regularly. Hypertension has no symptoms but can lead to stroke.</p></div><div class="flex gap-3 rounded-xl bg-blue-50 p-4 text-blue-700">⚕<p class="text-sm">At least 150 minutes of moderate physical activity per week reduces chronic disease risk by 30%.</p></div><div class="flex gap-3 rounded-xl bg-indigo-50 p-4 text-indigo-700">♜<p class="text-sm">Stay up-to-date with your vaccinations. Annual flu vaccine is recommended for adults 18+.</p></div></div></div>
     </section>
 
-    <section data-tab-panel="records" class="hidden space-y-4 sm:space-y-5"><h2 class="text-base font-bold text-gray-900 sm:text-xl">▤ My Health Records</h2><div class="grid grid-cols-3 gap-3"><?php foreach ([['Total Visits',count($consultations),'text-blue-600'],['This Year',$visitsThisYear,'text-emerald-600'],['Prescriptions',$totalPrescriptions,'text-purple-600']] as [$label, $value, $color]): ?><div class="rounded-xl border border-gray-100 bg-white p-3 text-center shadow-sm sm:p-4"><p class="text-2xl font-black <?= esc($color) ?>"><?= esc($value) ?></p><p class="mt-0.5 text-xs font-semibold text-gray-500"><?= esc($label) ?></p></div><?php endforeach; ?></div><div class="space-y-3"><?php if (!$consultations): ?><div class="rounded-xl border border-gray-100 bg-white p-5 text-center text-gray-500 shadow-sm">No consultations recorded yet. Your past visits will appear here once they are available.</div><?php else: foreach ($consultations as $index => $consultation): $medications = array_filter(preg_split('/,\s*/', $consultation['medications_prescribed'] ?? '')); ?><article class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm"><div class="flex flex-wrap items-start justify-between gap-2"><div class="flex items-start gap-3"><span class="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-100 text-blue-600">⚕</span><div><p class="font-bold text-gray-900"><?= esc($consultation['diagnosis'] ?? 'Consultation details') ?></p><p class="text-sm text-gray-500"><?= esc($consultation['physician_name'] ?: 'Physician not available') ?></p></div></div><div class="text-right"><p class="font-mono text-xs text-gray-400"><?= esc($consultation['consultation_date'] ?? '—') ?></p><?php if (!empty($consultation['treatment_plan'])): ?><span class="mt-1 inline-block rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">Treatment plan</span><?php endif; ?></div></div><div class="mt-3 border-t border-gray-100 pt-3"><p class="mb-1.5 text-xs font-semibold text-gray-500">Medications prescribed:</p><div class="flex flex-wrap gap-1"><?php if ($medications): foreach ($medications as $medication): ?><span class="rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 text-xs text-blue-700"><?= esc($medication) ?></span><?php endforeach; else: ?><span class="text-xs text-gray-400">None recorded</span><?php endif; ?></div></div><div class="mt-2 flex items-center justify-between text-xs text-gray-400"><span class="font-mono"><?= esc($consultation['id'] ?? 'CONS-' . ($index + 1)) ?></span><a href="ResidentDashboard.php?tab=records&download=<?= (int) ($consultation['id'] ?? 0) ?>" class="font-semibold text-blue-600 hover:underline">⇩ Download</a></div></article><?php endforeach; endif; ?></div></section>
+    <section data-tab-panel="records" class="hidden space-y-4 sm:space-y-5"><div class="flex flex-wrap items-center justify-between gap-2"><h2 class="text-base font-bold text-gray-900 sm:text-xl">▤ My Health Records</h2><button type="button" data-scroll-to="appointment-request" class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 shadow-sm">+ Book OPD Appointment</button></div><div class="grid grid-cols-3 gap-3"><?php foreach ([['Total Visits',count($consultations),'text-blue-600'],['This Year',$visitsThisYear,'text-emerald-600'],['Prescriptions',$totalPrescriptions,'text-purple-600']] as [$label, $value, $color]): ?><div class="rounded-xl border border-gray-100 bg-white p-3 text-center shadow-sm sm:p-4"><p class="text-2xl font-black <?= esc($color) ?>"><?= esc($value) ?></p><p class="mt-0.5 text-xs font-semibold text-gray-500"><?= esc($label) ?></p></div><?php endforeach; ?></div><div class="space-y-3"><?php if (!$consultations): ?><div class="rounded-xl border border-gray-100 bg-white p-5 text-center text-gray-500 shadow-sm">No consultations recorded yet. Your past visits will appear here once they are available.</div><?php else: foreach ($consultations as $index => $consultation): $medications = array_filter(preg_split('/,\s*/', $consultation['medications_prescribed'] ?? '')); ?><article class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm"><div class="flex flex-wrap items-start justify-between gap-2"><div class="flex items-start gap-3"><span class="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-100 text-blue-600">⚕</span><div><p class="font-bold text-gray-900"><?= esc($consultation['diagnosis'] ?? 'Consultation details') ?></p><p class="text-sm text-gray-500"><?= esc($consultation['physician_name'] ?: 'Physician not available') ?></p></div></div><div class="text-right"><p class="font-mono text-xs text-gray-400"><?= esc($consultation['consultation_date'] ?? '—') ?></p><?php if (!empty($consultation['treatment_plan'])): ?><span class="mt-1 inline-block rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">Treatment plan</span><?php endif; ?></div></div><div class="mt-3 border-t border-gray-100 pt-3"><p class="mb-1.5 text-xs font-semibold text-gray-500">Medications prescribed:</p><div class="flex flex-wrap gap-1"><?php if ($medications): foreach ($medications as $medication): ?><span class="rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 text-xs text-blue-700"><?= esc($medication) ?></span><?php endforeach; else: ?><span class="text-xs text-gray-400">None recorded</span><?php endif; ?></div></div><div class="mt-2 flex items-center justify-between text-xs text-gray-400"><span class="font-mono"><?= esc($consultation['id'] ?? 'CONS-' . ($index + 1)) ?></span><a href="ResidentDashboard.php?tab=records&download=<?= (int) ($consultation['id'] ?? 0) ?>" class="font-semibold text-blue-600 hover:underline">⇩ Download</a></div></article><?php endforeach; endif; ?></div>
+
+    <div id="appointment-request" class="rounded-xl border border-blue-200 bg-blue-50/70 p-5 space-y-3">
+        <p class="text-sm font-bold text-blue-900 flex items-center gap-2">📅 Request an OPD Consultation Appointment</p>
+        <form method="post" action="ResidentDashboard.php?tab=records" class="space-y-3 text-xs">
+            <input type="hidden" name="form" value="appointment_request">
+            <div>
+                <label class="block font-bold text-gray-700 mb-1">Chief Health Complaint / Reason for Visit *</label>
+                <input required name="chief_complaint" placeholder="e.g., Follow-up consultation for blood pressure / Cough for 3 days" class="w-full p-2.5 bg-white border border-gray-300 rounded-lg text-sm">
+            </div>
+            <div>
+                <label class="block font-bold text-gray-700 mb-1">Preferred Appointment Date *</label>
+                <input type="date" required name="preferred_date" value="<?php echo date('Y-m-d', strtotime('+1 day')); ?>" min="<?php echo date('Y-m-d'); ?>" class="w-full p-2.5 bg-white border border-gray-300 rounded-lg text-sm">
+            </div>
+            <button type="submit" class="w-full py-2.5 bg-blue-600 text-white font-bold rounded-lg text-sm hover:bg-blue-700 shadow-md">Submit Appointment Request to RHU Doctor</button>
+        </form>
+    </div>
+    </section>
 
     <section data-tab-panel="immunization" class="hidden space-y-4 sm:space-y-5"><h2 class="text-base font-bold text-gray-900 sm:text-xl">⌁ Immunization Record</h2><div class="flex gap-3 rounded-xl border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-700">✓<p>Your immunization records are verified by <strong>Nasugbu Rural Health Unit I</strong>. Present this screen or download your card at the RHU office.</p></div><div class="space-y-3"><?php if (!$vaccinationRecords): ?><div class="rounded-xl border border-gray-100 bg-white p-5 text-center text-gray-500 shadow-sm">No vaccination records found. Your immunization history will appear here once available.</div><?php else: foreach ($vaccinationRecords as $record): $upToDate = !empty($record['next_dose_date']); ?><article class="flex items-center gap-4 rounded-xl border border-gray-100 bg-white p-4 shadow-sm"><span class="flex h-10 w-10 items-center justify-center rounded-xl <?= $upToDate ? 'bg-indigo-100 text-indigo-600' : 'bg-green-100 text-green-600' ?>">♜</span><div class="min-w-0 flex-1"><p class="text-sm font-bold text-gray-900"><?= esc($record['vaccine_name']) ?></p><p class="mt-0.5 text-xs text-gray-500">Last given: <?= esc($record['vaccination_date'] ?? '—') ?></p><?php if ($upToDate): ?><p class="mt-0.5 text-xs text-emerald-700">Next due: <strong><?= esc($record['next_dose_date']) ?></strong></p><?php endif; ?><?php if (!empty($record['provider_name'])): ?><p class="mt-0.5 text-xs text-gray-500">Provided by: <?= esc($record['provider_name']) ?></p><?php endif; ?></div><span class="rounded-full px-2 py-1 text-xs font-bold <?= $upToDate ? 'bg-indigo-100 text-indigo-700' : 'bg-green-100 text-green-700' ?>"><?= $upToDate ? 'Up to date' : 'Complete' ?></span></article><?php endforeach; endif; ?></div><div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5"><h3 class="mb-3 font-bold text-gray-900">ⓘ Recommended for Adults 36+</h3><div class="space-y-2 text-sm text-gray-600"><?php foreach (['Annual Influenza Vaccine','Pneumococcal vaccine every 5 years','Td booster every 10 years','Hepatitis B (if not previously vaccinated)','COVID-19 booster (per DOH schedule)'] as $recommendation): ?><p>› <?= esc($recommendation) ?></p><?php endforeach; ?></div></div><a href="ResidentDashboard.php?tab=immunization&download_immunization=1" class="inline-flex w-full items-center justify-center rounded-xl bg-indigo-600 py-3 font-semibold text-white hover:bg-indigo-700">⇩ Download Immunization Card</a></section>
 
@@ -224,7 +262,36 @@ $dotClasses = ['red' => 'bg-red-500', 'pink' => 'bg-pink-500', 'blue' => 'bg-blu
 
     <section data-tab-panel="events" class="hidden space-y-4 sm:space-y-5"><h2 class="text-base font-bold text-gray-900 sm:text-xl">▣ RHU Events &amp; Health Programs</h2><div class="flex gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">ⓘ<p>All events are <strong>FREE</strong> for registered residents of Nasugbu. Bring a valid ID and your PhilHealth card.</p></div><div class="space-y-3"><?php foreach ($events as [$date, $title, $detail, $color]): ?><article class="flex items-start gap-4 rounded-xl border p-4 <?= $eventClasses[$color] ?>"><span class="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full <?= $dotClasses[$color] ?>"></span><div class="flex-1"><div class="flex flex-wrap items-center gap-2"><span class="rounded border border-gray-200 bg-white px-2 py-0.5 font-mono text-xs text-gray-500"><?= esc($date) ?></span><span class="text-sm font-bold text-gray-900"><?= esc($title) ?></span></div><p class="mt-1 text-xs text-gray-600"><?= esc($detail) ?></p></div><button type="button" data-event-action="true" data-event-title="<?= esc($title) ?>" data-event-date="<?= esc($date) ?>" class="text-xs font-semibold text-gray-500">→</button></article><?php endforeach; ?></div><div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5"><h3 class="mb-3 font-bold text-gray-900">Standing Programs (Monthly)</h3><div class="space-y-2 text-sm"><?php foreach ([['OPD Consultations','Mon–Fri, 8AM–5PM','RHU Main'],['Pre-natal Check-up','Mon & Wed, 8AM–12NN','RHU Lying-in'],['Family Planning','Every Tuesday, 8AM–12NN','RHU Main'],['TB-DOTS Drug Collection','Daily, 8AM–5PM','RHU DOTS Corner'],['Nutrition Counseling','Every Thursday','RHU Nutrition Unit'],['Child Immunization','Wed & Fri, 8AM–12NN','RHU EPI Room'],['Senior Citizen Clinic','1st Monday/month','RHU Main']] as [$program, $schedule, $location]): ?><div class="flex gap-3 border-b border-gray-50 py-2 last:border-0"><span class="mt-1.5 h-2 w-2 rounded-full bg-emerald-500"></span><div><p class="font-semibold text-gray-800"><?= esc($program) ?></p><p class="text-xs text-gray-500"><?= esc($schedule) ?> · <?= esc($location) ?></p></div></div><?php endforeach; ?></div></div></section>
 
-    <section data-tab-panel="contact" class="hidden space-y-4 sm:space-y-5"><h2 class="text-base font-bold text-gray-900 sm:text-xl">☎ Contact the RHU</h2><div class="space-y-3 rounded-xl border border-gray-100 bg-white p-5 shadow-sm sm:space-y-4"><h3 class="font-bold text-gray-900">Nasugbu Rural Health Unit I</h3><?php foreach ([['⌖','Address','Poblacion, Nasugbu, Batangas'],['☎','Contact','(043) 416-1234'],['◷','Hours','Mon–Fri: 8:00 AM – 5:00 PM'],['♙','Municipal Health Officer','Dr. Rosalinda V. Castillo']] as [$icon, $label, $value]): ?><div class="flex gap-3"><span class="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-50 text-teal-600"><?= esc($icon) ?></span><div><p class="text-xs font-semibold uppercase tracking-wide text-gray-500"><?= esc($label) ?></p><p class="mt-0.5 text-sm font-medium text-gray-800"><?= esc($value) ?></p></div></div><?php endforeach; ?></div><div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm"><h3 class="mb-3 font-bold text-gray-900">Send a Message</h3><?php if ($contactSuccess): ?><div class="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700"><?= esc($contactSuccess) ?></div><?php endif; ?><?php if ($contactErrors): ?><div class="mb-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"><?php foreach ($contactErrors as $error): ?><p><?= esc($error) ?></p><?php endforeach; ?></div><?php endif; ?><form method="post" action="ResidentDashboard.php?tab=contact" class="space-y-3"><input type="hidden" name="form" value="contact"><label class="block text-xs font-semibold uppercase tracking-wide text-gray-500">Message Type</label><select name="subject" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm"><option value="General Inquiry">General Inquiry</option><option value="Appointment Request">Appointment Request</option><option value="Certificate Request">Certificate Request</option><option value="Health Concern">Health Concern</option><option value="Feedback / Complaint">Feedback / Complaint</option></select><label class="block text-xs font-semibold uppercase tracking-wide text-gray-500">Message</label><textarea name="message" rows="4" class="w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm" placeholder="Type your message here..."></textarea><button type="submit" class="w-full rounded-lg bg-teal-600 py-2.5 text-sm font-semibold text-white hover:bg-teal-700">Send Message</button></form></div></section>
+    <section data-tab-panel="contact" class="hidden space-y-4 sm:space-y-5"><h2 class="text-base font-bold text-gray-900 sm:text-xl">☎ Contact the RHU</h2><div class="space-y-3 rounded-xl border border-gray-100 bg-white p-5 shadow-sm sm:space-y-4"><h3 class="font-bold text-gray-900">Nasugbu Rural Health Unit I</h3><?php foreach ([['⌖','Address','Poblacion, Nasugbu, Batangas'],['☎','Contact','(043) 416-1234'],['◷','Hours','Mon–Fri: 8:00 AM – 5:00 PM'],['♙','Municipal Health Officer','Dr. Chedric Bascoguin']] as [$icon, $label, $value]): ?><div class="flex gap-3"><span class="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-50 text-teal-600"><?= esc($icon) ?></span><div><p class="text-xs font-semibold uppercase tracking-wide text-gray-500"><?= esc($label) ?></p><p class="mt-0.5 text-sm font-medium text-gray-800"><?= esc($value) ?></p></div></div><?php endforeach; ?></div><div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm"><h3 class="mb-3 font-bold text-gray-900">Send a Message to RHU Staff</h3><?php if ($contactSuccess): ?><div class="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700"><?= esc($contactSuccess) ?></div><?php endif; ?><?php if ($contactErrors): ?><div class="mb-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"><?php foreach ($contactErrors as $error): ?><p><?= esc($error) ?></p><?php endforeach; ?></div><?php endif; ?><form method="post" action="ResidentDashboard.php?tab=contact" class="space-y-3"><input type="hidden" name="form" value="contact"><label class="block text-xs font-semibold uppercase tracking-wide text-gray-500">Message Type</label><select name="subject" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm"><option value="General Inquiry">General Inquiry</option><option value="Appointment Request">Appointment Request</option><option value="Certificate Request">Certificate Request</option><option value="Health Concern">Health Concern</option><option value="Feedback / Complaint">Feedback / Complaint</option></select><label class="block text-xs font-semibold uppercase tracking-wide text-gray-500">Message</label><textarea name="message" rows="4" class="w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm" placeholder="Type your message here..."></textarea><button type="submit" class="w-full rounded-lg bg-teal-600 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 shadow-md">Send Message to RHU Staff</button></form></div>
+
+    <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm space-y-3">
+        <h3 class="font-bold text-gray-900 text-sm">Your Sent Messages & Staff Replies</h3>
+        <?php if (empty($residentMessages)): ?>
+            <p class="text-xs text-gray-500">No messages sent yet. Messages you send above will be dispatched directly to RHU Staff and Admin dashboards.</p>
+        <?php else: ?>
+            <div class="space-y-3">
+                <?php foreach ($residentMessages as $msg): ?>
+                    <div class="p-3.5 rounded-xl border border-gray-100 bg-gray-50 space-y-1.5">
+                        <div class="flex justify-between items-center text-xs">
+                            <span class="font-bold text-gray-900"><?php echo esc($msg['subject']); ?></span>
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold <?php echo $msg['status'] === 'Replied' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-amber-100 text-amber-700 border border-amber-200'; ?>">
+                                <?php echo esc($msg['status']); ?>
+                            </span>
+                        </div>
+                        <p class="text-xs text-gray-700 leading-relaxed"><?php echo esc($msg['message']); ?></p>
+                        <p class="text-[10px] text-gray-400"><?php echo esc(date('M d, Y h:i A', strtotime($msg['created_at']))); ?></p>
+                        <?php if (!empty($msg['admin_reply'])): ?>
+                            <div class="mt-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-900 space-y-1">
+                                <p class="font-bold flex items-center gap-1 text-blue-800">💬 RHU Staff Official Response:</p>
+                                <p class="text-blue-950 font-medium"><?php echo esc($msg['admin_reply']); ?></p>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        <?php endif; ?>
+    </div>
+    </section>
   </main>
 
   <nav class="fixed bottom-0 left-0 right-0 z-50 border-t border-gray-200 bg-white sm:hidden"><div class="flex"><?php foreach ($tabs as $id => [$label, $icon]): ?><button type="button" data-tab-button="<?= esc($id) ?>" class="flex flex-1 flex-col items-center gap-0.5 py-2 text-gray-400"><span class="text-base"><?= esc($icon) ?></span><span class="w-full truncate px-0.5 text-center text-[10px] font-semibold"><?= esc($label) ?></span></button><?php endforeach; ?></div></nav>
