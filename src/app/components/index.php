@@ -14,7 +14,7 @@ $components = [
     'DonationCertificate' => 'Donation Certificate',
     'DonorDashboard' => 'Donor Dashboard',
     'HospitalRegistration' => 'Hospital Registration',
-    'LandingPage' => 'RedPulse RHU - Home',
+    'LandingPage' => 'ResiHUnity RHU - Home',
     'LoginSelection' => 'Login Selection',
     'MedTechDashboard' => 'Medical Technologist Dashboard',
     'MidwifeDashboard' => 'Midwife Dashboard',
@@ -122,14 +122,14 @@ if (!file_exists($phpFile) && $phpFile !== __FILE__) {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>RedPulse RHU - PHP Components Index</title>
+        <title>ResiHUnity RHU - PHP Components Index</title>
         <script src="https://cdn.tailwindcss.com"></script>
     </head>
     <body class="bg-gradient-to-br from-slate-900 via-slate-800 to-gray-900">
         <div class="min-h-screen py-12 px-4">
             <div class="max-w-4xl mx-auto">
                 <div class="text-center mb-12">
-                    <h1 class="text-4xl font-bold text-white mb-2">RedPulse RHU</h1>
+                    <h1 class="text-4xl font-bold text-white mb-2">ResiHUnity RHU</h1>
                     <p class="text-gray-400">All Components Successfully Converted to PHP</p>
                     <p class="text-green-400 font-semibold mt-2">✓ All functionality, UI, styling, and logic preserved</p>
                 </div>

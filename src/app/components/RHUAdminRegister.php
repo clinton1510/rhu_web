@@ -116,7 +116,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Initial Admin Registration - RedPulse RHU</title>
+  <title>Initial Admin Registration - ResiHUnity RHU</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 
@@ -125,7 +125,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <header class="mb-6 text-center">
       <a href="LandingPage.php" class="inline-flex items-center gap-2">
         <span class="text-4xl text-red-500">♥</span>
-        <span class="text-3xl font-bold">RedPulse RHU</span>
+        <span class="text-3xl font-bold">ResiHUnity RHU</span>
       </a>
       <p class="mt-4 inline-block rounded-full border border-purple-700 bg-purple-900/60 px-4 py-1.5 text-xs font-bold text-purple-200">♢ One-Time System Setup</p>
       <h1 class="mt-2 text-2xl font-bold">System Administrator Registration</h1>

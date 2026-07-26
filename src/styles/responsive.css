@@ -15,20 +15,15 @@
 }
 
 html {
-  scroll-behavior: smooth;
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
-  /* Ensure the entire page scrolls on mobile */
   height: 100%;
-  overflow-y: auto;
 }
 
 body {
   overflow-x: hidden;
-  overflow-y: auto;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  /* Prevent rubber-band scroll hiding content */
   min-height: 100%;
 }
 

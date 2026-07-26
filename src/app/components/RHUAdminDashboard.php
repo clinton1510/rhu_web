@@ -163,8 +163,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
     if ($action === 'send_test_email') {
         $targetEmail = trim($_POST['test_email'] ?? 'chedricbascoguin27@gmail.com');
         $testCode = sprintf('%06d', mt_rand(100000, 999999));
-        $subject = 'RedPulse RHU - System SMTP Integration Test';
-        $html = "<h3>RedPulse RHU System Test</h3><p>This is a test 2FA email sent from RHU System Settings.</p><div class='code-box'>{$testCode}</div>";
+        $subject = 'ResiHUnity RHU - System SMTP Integration Test';
+        $html = "<h3>ResiHUnity RHU System Test</h3><p>This is a test 2FA email sent from RHU System Settings.</p><div class='code-box'>{$testCode}</div>";
         $res = sendRHUEmail($targetEmail, $subject, $html);
         if ($res['success']) {
             $flashSuccess = "Test email dispatched successfully to {$targetEmail}! (Method: {$res['method']})";
@@ -423,14 +423,219 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
         }
     }
 
-    try {
-        $extendedMessage = adminExtendedAction($pdo, $action, (int)$_SESSION['user']['user_id']);
-        if ($extendedMessage !== null) $flashSuccess = $extendedMessage;
-    } catch (Throwable $extendedError) {
-        error_log('Extended admin action: ' . $extendedError->getMessage());
-        $flashError = 'The requested operation failed: ' . $extendedError->getMessage();
+    // Action: Publish Announcement for Landing Page
+    if ($action === 'create_announcement') {
+        $title = trim($_POST['title'] ?? '');
+        $category = trim($_POST['category'] ?? 'Health Notice');
+        $content = trim($_POST['content'] ?? '');
+        $badgeText = trim($_POST['badge_text'] ?? 'Notice');
+        $postedBy = trim($_SESSION['user']['username'] ?? 'MHO Admin');
+
+        if ($title !== '' && $content !== '') {
+            ensurePortalTables($pdo);
+            $stmt = $pdo->prepare("INSERT INTO portal_announcements (title, category, content, badge_text, is_active, posted_by) VALUES (:t, :c, :cnt, :b, 1, :p)");
+            $stmt->execute(['t' => $title, 'c' => $category, 'cnt' => $content, 'b' => $badgeText, 'p' => $postedBy]);
+            portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Published Landing Page Announcement: {$title}", 'portal_announcements', (int)$pdo->lastInsertId());
+            $flashSuccess = "Announcement published live to Landing Page!";
+        } else {
+            $flashError = "Please provide both title and content for the announcement.";
+        }
+    }
+
+    // Action: Delete Announcement
+    if ($action === 'delete_announcement') {
+        $annId = (int)($_POST['announcement_id'] ?? 0);
+        if ($annId > 0) {
+            $stmt = $pdo->prepare("DELETE FROM portal_announcements WHERE id = :id");
+            $stmt->execute(['id' => $annId]);
+            portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Deleted Announcement #{$annId}", 'portal_announcements', $annId);
+            $flashSuccess = "Announcement removed from Landing Page.";
+        }
+    }
+
+    // Action: Create Health Event
+    if ($action === 'create_event') {
+        $eventDate = trim($_POST['event_date'] ?? '');
+        $title = trim($_POST['title'] ?? '');
+        $venue = trim($_POST['venue'] ?? '');
+        $description = trim($_POST['description'] ?? '');
+        $badgeColor = trim($_POST['badge_color'] ?? 'bg-emerald-500');
+        $imageUrl = trim($_POST['image_url'] ?? '');
+
+        if (!empty($_FILES['event_image']['tmp_name'])) {
+            $uploadDir = dirname(__DIR__, 3) . '/uploads/events/';
+            if (!is_dir($uploadDir)) {
+                @mkdir($uploadDir, 0777, true);
+            }
+            $ext = pathinfo($_FILES['event_image']['name'], PATHINFO_EXTENSION);
+            $filename = 'event_' . time() . '_' . mt_rand(100, 999) . '.' . strtolower($ext ?: 'jpg');
+            $target = $uploadDir . $filename;
+            if (@move_uploaded_file($_FILES['event_image']['tmp_name'], $target)) {
+                $imageUrl = 'uploads/events/' . $filename;
+            }
+        }
+
+        if ($title !== '' && $eventDate !== '' && $venue !== '') {
+            ensurePortalTables($pdo);
+            $stmt = $pdo->prepare("INSERT INTO portal_events (event_date, title, venue, description, image_url, badge_color, is_active) VALUES (:ed, :t, :v, :d, :img, :bc, 1)");
+            $stmt->execute(['ed' => $eventDate, 't' => $title, 'v' => $venue, 'd' => $description, 'img' => $imageUrl, 'bc' => $badgeColor]);
+            portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Created Health Event: {$title}", 'portal_events', (int)$pdo->lastInsertId());
+            $flashSuccess = "Health Event with picture published live to Landing Page!";
+        } else {
+            $flashError = "Please complete event date, title, and venue.";
+        }
+    }
+
+    // Action: Delete Health Event (and attached uploaded picture)
+    if ($action === 'delete_event') {
+        $evtId = (int)($_POST['event_id'] ?? 0);
+        if ($evtId > 0) {
+            $stmtImg = $pdo->prepare("SELECT image_url FROM portal_events WHERE id = :id");
+            $stmtImg->execute(['id' => $evtId]);
+            $imgFile = $stmtImg->fetchColumn();
+            if (!empty($imgFile) && str_starts_with($imgFile, 'uploads/events/')) {
+                $localPath = dirname(__DIR__, 3) . '/' . ltrim($imgFile, '/');
+                if (file_exists($localPath)) {
+                    @unlink($localPath);
+                }
+            }
+
+            $stmt = $pdo->prepare("DELETE FROM portal_events WHERE id = :id");
+            $stmt->execute(['id' => $evtId]);
+            portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Deleted Health Event #{$evtId}", 'portal_events', $evtId);
+            $flashSuccess = "Health event and attached picture deleted successfully.";
+        }
+    }
+
+    // Action: Delete Event Cover Picture Only
+    if ($action === 'delete_event_picture') {
+        $evtId = (int)($_POST['event_id'] ?? 0);
+        if ($evtId > 0) {
+            $stmtImg = $pdo->prepare("SELECT image_url FROM portal_events WHERE id = :id");
+            $stmtImg->execute(['id' => $evtId]);
+            $imgFile = $stmtImg->fetchColumn();
+            if (!empty($imgFile) && str_starts_with($imgFile, 'uploads/events/')) {
+                $localPath = dirname(__DIR__, 3) . '/' . ltrim($imgFile, '/');
+                if (file_exists($localPath)) {
+                    @unlink($localPath);
+                }
+            }
+
+            $stmt = $pdo->prepare("UPDATE portal_events SET image_url = NULL WHERE id = :id");
+            $stmt->execute(['id' => $evtId]);
+            portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Removed Picture from Health Event #{$evtId}", 'portal_events', $evtId);
+            $flashSuccess = "Event picture removed successfully.";
+        }
+    }
+
+    // Action: Add Municipal Official to portal_settings
+    if ($action === 'add_official') {
+        $name = trim($_POST['official_name'] ?? '');
+        $position = trim($_POST['official_position'] ?? '');
+        $office = trim($_POST['official_office'] ?? '');
+
+        if ($name !== '' && $position !== '') {
+            $settings = portalSettings($pdo);
+            $currentOfficials = [];
+            if (!empty($settings['rhu_municipal_officials'])) {
+                $currentOfficials = json_decode($settings['rhu_municipal_officials'], true) ?: [];
+            }
+            $currentOfficials[] = [
+                'name' => $name,
+                'position' => $position,
+                'office' => $office ?: 'LGU Nasugbu'
+            ];
+            $jsonStr = json_encode($currentOfficials);
+            $stmt = $pdo->prepare("INSERT INTO portal_settings (setting_key, setting_value) VALUES ('rhu_municipal_officials', :val) ON DUPLICATE KEY UPDATE setting_value = :val");
+            $stmt->execute(['val' => $jsonStr]);
+            portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Added Municipal Official: {$name}", 'portal_settings', 1);
+            $flashSuccess = "Municipal Official '{$name}' added and updated live on Landing Page!";
+        } else {
+            $flashError = "Please enter official name and position.";
+        }
+    }
+
+    // Action: Delete Municipal Official
+    if ($action === 'delete_official') {
+        $index = (int)($_POST['official_index'] ?? -1);
+        $settings = portalSettings($pdo);
+        if (!empty($settings['rhu_municipal_officials'])) {
+            $currentOfficials = json_decode($settings['rhu_municipal_officials'], true) ?: [];
+            if (isset($currentOfficials[$index])) {
+                $removed = $currentOfficials[$index]['name'] ?? 'Official';
+                array_splice($currentOfficials, $index, 1);
+                $jsonStr = json_encode($currentOfficials);
+                $stmt = $pdo->prepare("INSERT INTO portal_settings (setting_key, setting_value) VALUES ('rhu_municipal_officials', :val) ON DUPLICATE KEY UPDATE setting_value = :val");
+                $stmt->execute(['val' => $jsonStr]);
+                portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Removed Municipal Official #{$index}", 'portal_settings', 1);
+                $flashSuccess = "Municipal Official '{$removed}' removed from Landing Page.";
+            }
+        }
+    }
+
+    // Action: Add Photo to Landing Page Event Gallery (stored in portal_settings)
+    if ($action === 'add_gallery_photo') {
+        $photoTitle = trim($_POST['photo_title'] ?? '');
+        $photoCategory = trim($_POST['photo_category'] ?? 'Event Photo');
+        $photoDate = trim($_POST['photo_date'] ?? date('M Y'));
+        $imageUrl = trim($_POST['image_url'] ?? '');
+
+        if (!empty($_FILES['gallery_file']['tmp_name'])) {
+            $uploadDir = dirname(__DIR__, 3) . '/uploads/events/';
+            if (!is_dir($uploadDir)) {
+                @mkdir($uploadDir, 0777, true);
+            }
+            $ext = pathinfo($_FILES['gallery_file']['name'], PATHINFO_EXTENSION);
+            $filename = 'gallery_' . time() . '_' . mt_rand(100, 999) . '.' . strtolower($ext ?: 'jpg');
+            $target = $uploadDir . $filename;
+            if (@move_uploaded_file($_FILES['gallery_file']['tmp_name'], $target)) {
+                $imageUrl = 'uploads/events/' . $filename;
+            }
+        }
+
+        if ($photoTitle !== '' && $imageUrl !== '') {
+            $currentGallery = getPortalEventGallery($pdo);
+            array_unshift($currentGallery, [
+                'title' => $photoTitle,
+                'category' => $photoCategory,
+                'image_url' => $imageUrl,
+                'date' => $photoDate
+            ]);
+            $jsonStr = json_encode($currentGallery);
+            $stmt = $pdo->prepare("INSERT INTO portal_settings (setting_key, setting_value) VALUES ('rhu_event_gallery', :val) ON DUPLICATE KEY UPDATE setting_value = :val");
+            $stmt->execute(['val' => $jsonStr]);
+            portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Added Event Gallery Photo: {$photoTitle}", 'portal_settings', 1);
+            $flashSuccess = "Event photo '{$photoTitle}' published to Landing Page gallery!";
+        } else {
+            $flashError = "Please provide photo title and image file/URL.";
+        }
+    }
+
+    // Action: Delete Photo from Landing Page Event Gallery
+    if ($action === 'delete_gallery_photo') {
+        $index = (int)($_POST['photo_index'] ?? -1);
+        $currentGallery = getPortalEventGallery($pdo);
+        if (isset($currentGallery[$index])) {
+            $removed = $currentGallery[$index]['title'] ?? 'Photo';
+            $imgFile = $currentGallery[$index]['image_url'] ?? '';
+
+            if (!empty($imgFile) && str_starts_with($imgFile, 'uploads/events/')) {
+                $localPath = dirname(__DIR__, 3) . '/' . ltrim($imgFile, '/');
+                if (file_exists($localPath)) {
+                    @unlink($localPath);
+                }
+            }
+
+            array_splice($currentGallery, $index, 1);
+            $jsonStr = json_encode($currentGallery);
+            $stmt = $pdo->prepare("INSERT INTO portal_settings (setting_key, setting_value) VALUES ('rhu_event_gallery', :val) ON DUPLICATE KEY UPDATE setting_value = :val");
+            $stmt->execute(['val' => $jsonStr]);
+            portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Deleted Gallery Photo #{$index}", 'portal_settings', 1);
+            $flashSuccess = "Picture '{$removed}' deleted successfully from gallery and server.";
+        }
     }
 }
+
 
 // RHU Profile Settings
 $savedPortalSettings = portalSettings($pdo);
@@ -458,6 +663,8 @@ $dbAuditLogsList = [];
 $dbCertificatesList = [];
 $dbMessagesList = [];
 $dbEventsList = [];
+$dbAnnouncementsList = [];
+$dbPortalEventsList = [];
 $adminNotifications = [];
 
 // Clinical data
@@ -678,12 +885,7 @@ $tabLabelMap = [
     'users' => 'User Management',
     'staff' => 'Staff Accounts',
     'residents' => 'Resident Registry',
-    'consultations' => 'OPD Consultations',
-    'maternal' => 'Maternal Health',
-    'vaccination' => 'Immunization',
-    'disease' => 'Disease Surveillance',
-    'medicine' => 'Medicine Inventory',
-    'vital' => 'Vital Statistics',
+    'announcements' => 'Landing Page Content',
     'reports' => 'Reports & Analytics',
     'audit' => 'Audit Logs',
     'system' => 'System Settings',
@@ -695,12 +897,7 @@ $tabIconMap = [
     'users' => 'users',
     'staff' => 'stethoscope',
     'residents' => 'check',
-    'consultations' => 'activity',
-    'maternal' => 'baby',
-    'vaccination' => 'shield',
-    'disease' => 'alert',
-    'medicine' => 'pill',
-    'vital' => 'file',
+    'announcements' => 'bell',
     'reports' => 'bar',
     'audit' => 'database',
     'system' => 'settings',
@@ -745,7 +942,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RHU Admin Dashboard - RedPulse RHU</title>
+    <title>RHU Admin Dashboard - ResiHUnity RHU</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         html { scroll-behavior: smooth; }
@@ -1865,6 +2062,335 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                             <input name="description" placeholder="Description" class="rounded border p-2">
                             <button class="sm:col-span-3 rounded bg-indigo-700 py-2 font-bold text-white">Publish Event to Residents</button>
                         </form>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <!-- ANNOUNCEMENTS & LANDING PAGE CONTENT TAB -->
+            <?php if ($tab === 'announcements'): ?>
+                <?php 
+                $dbAnnouncementsList = getPortalAnnouncements($pdo);
+                $dbPortalEventsList = getPortalEvents($pdo);
+                ?>
+                <div class="space-y-6">
+                    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-4">
+                        <div>
+                            <h2 class="text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('bell', 'w-6 h-6 text-purple-600'); ?> Landing Page Announcements & Health Events</h2>
+                            <p class="text-xs text-gray-500 mt-1">Publish health alerts, emergency notices, and upcoming health drives directly to the public Landing Page.</p>
+                        </div>
+                        <span class="text-xs font-bold bg-purple-100 text-purple-800 px-3 py-1 rounded-full">Live Landing Page Sync</span>
+                    </div>
+
+                    <div class="grid md:grid-cols-2 gap-6">
+                        <!-- 1. ANNOUNCEMENTS FORM & LIST -->
+                        <div class="space-y-6">
+                            <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-200 space-y-4">
+                                <div class="flex items-center gap-2 border-b border-gray-100 pb-3">
+                                    <span class="p-2 bg-red-100 rounded-lg text-red-700"><?php echo iconSvg('bell', 'w-5 h-5'); ?></span>
+                                    <h3 class="font-bold text-gray-900 text-base">Publish Health Announcement / Alert</h3>
+                                </div>
+                                <form method="post" class="space-y-3 text-xs">
+                                    <input type="hidden" name="action" value="create_announcement">
+                                    <div>
+                                        <label class="block font-bold text-gray-700 mb-1">Announcement Title *</label>
+                                        <input required type="text" name="title" placeholder="e.g. Dengue Alert: Stagnant Water Clean-Up" class="w-full p-2.5 rounded-lg border border-gray-300">
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label class="block font-bold text-gray-700 mb-1">Category</label>
+                                            <select name="category" class="w-full p-2.5 rounded-lg border border-gray-300 bg-white">
+                                                <option value="Emergency Alert">Emergency Alert</option>
+                                                <option value="Health Notice" selected>Health Notice</option>
+                                                <option value="Vaccine Schedule">Vaccine Schedule</option>
+                                                <option value="General Announcement">General Announcement</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="block font-bold text-gray-700 mb-1">Badge Label</label>
+                                            <input type="text" name="badge_text" value="Health Alert" class="w-full p-2.5 rounded-lg border border-gray-300">
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="block font-bold text-gray-700 mb-1">Announcement Details / Message *</label>
+                                        <textarea required name="content" rows="3" placeholder="Write full announcement description..." class="w-full p-2.5 rounded-lg border border-gray-300"></textarea>
+                                    </div>
+                                    <button type="submit" class="w-full py-2.5 bg-purple-700 text-white rounded-lg font-bold hover:bg-purple-800 transition-all shadow-md">
+                                        Publish to Landing Page Live
+                                    </button>
+                                </form>
+                            </div>
+
+                            <!-- ANNOUNCEMENTS LIST TABLE -->
+                            <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-200 space-y-3">
+                                <h4 class="font-bold text-gray-900 text-sm">Active Landing Page Announcements</h4>
+                                <?php if (empty($dbAnnouncementsList)): ?>
+                                    <p class="text-xs text-gray-400 italic py-2">No announcements stored yet. Standard default banner will display.</p>
+                                <?php else: ?>
+                                    <div class="space-y-2">
+                                        <?php foreach ($dbAnnouncementsList as $ann): ?>
+                                            <div class="p-3 rounded-xl border border-gray-100 bg-gray-50 flex items-start justify-between gap-3 text-xs">
+                                                <div>
+                                                    <span class="px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-bold text-[10px]"><?php echo esc($ann['badge_text'] ?: $ann['category']); ?></span>
+                                                    <h5 class="font-bold text-gray-900 mt-1"><?php echo esc($ann['title']); ?></h5>
+                                                    <p class="text-gray-600 mt-0.5"><?php echo esc($ann['content']); ?></p>
+                                                </div>
+                                                <form method="post" onsubmit="return confirm('Remove this announcement from Landing Page?')">
+                                                    <input type="hidden" name="action" value="delete_announcement">
+                                                    <input type="hidden" name="announcement_id" value="<?php echo $ann['id']; ?>">
+                                                    <button type="submit" class="p-1.5 text-red-600 hover:bg-red-50 rounded" title="Delete Announcement">
+                                                        <?php echo iconSvg('trash', 'w-4 h-4'); ?>
+                                                    </button>
+                                                </form>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+
+                        <!-- 2. HEALTH EVENTS FORM & LIST -->
+                        <div class="space-y-6">
+                            <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-200 space-y-4">
+                                <div class="flex items-center gap-2 border-b border-gray-100 pb-3">
+                                    <span class="p-2 bg-emerald-100 rounded-lg text-emerald-700"><?php echo iconSvg('activity', 'w-5 h-5'); ?></span>
+                                    <h3 class="font-bold text-gray-900 text-base">Add Landing Page Health Event & Picture</h3>
+                                </div>
+                                <form method="post" enctype="multipart/form-data" class="space-y-3 text-xs">
+                                    <input type="hidden" name="action" value="create_event">
+                                    <div class="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label class="block font-bold text-gray-700 mb-1">Event Date *</label>
+                                            <input required type="text" name="event_date" placeholder="e.g. Jul 28 or Aug 05" class="w-full p-2.5 rounded-lg border border-gray-300">
+                                        </div>
+                                        <div>
+                                            <label class="block font-bold text-gray-700 mb-1">Badge Color</label>
+                                            <select name="badge_color" class="w-full p-2.5 rounded-lg border border-gray-300 bg-white">
+                                                <option value="bg-red-500">Red (Emergency / Blood Drive)</option>
+                                                <option value="bg-pink-500">Pink (Women & Maternal)</option>
+                                                <option value="bg-emerald-500" selected>Green (Wellness & Senior)</option>
+                                                <option value="bg-blue-500">Blue (Child & Vaccine)</option>
+                                                <option value="bg-teal-500">Teal (Nutrition)</option>
+                                                <option value="bg-purple-500">Purple (Family Planning)</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="block font-bold text-gray-700 mb-1">Event Title *</label>
+                                        <input required type="text" name="title" placeholder="e.g. Free Senior Citizens ECG & Glucose Check" class="w-full p-2.5 rounded-lg border border-gray-300">
+                                    </div>
+                                    <div>
+                                        <label class="block font-bold text-gray-700 mb-1">Venue / Location *</label>
+                                        <input required type="text" name="venue" placeholder="e.g. Halang Barangay Health Station · 8:00 AM" class="w-full p-2.5 rounded-lg border border-gray-300">
+                                    </div>
+                                    <div>
+                                        <label class="block font-bold text-gray-700 mb-1">Event Description</label>
+                                        <textarea name="description" rows="2" placeholder="Brief event details or free services offered..." class="w-full p-2.5 rounded-lg border border-gray-300"></textarea>
+                                    </div>
+                                    <div>
+                                        <label class="block font-bold text-gray-700 mb-1">Event Cover Picture (File Upload or Image URL)</label>
+                                        <div class="grid grid-cols-2 gap-2">
+                                            <input type="file" name="event_image" accept="image/*" class="p-1.5 rounded border border-gray-300 text-[11px]">
+                                            <input type="text" name="image_url" placeholder="Or paste Image URL..." class="p-2.5 rounded-lg border border-gray-300 text-xs">
+                                        </div>
+                                    </div>
+                                    <button type="submit" class="w-full py-2.5 bg-emerald-700 text-white rounded-lg font-bold hover:bg-emerald-800 transition-all shadow-md">
+                                        Add Event & Picture to Landing Page
+                                    </button>
+                                </form>
+                            </div>
+
+                            <!-- EVENTS LIST TABLE -->
+                            <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-200 space-y-3">
+                                <h4 class="font-bold text-gray-900 text-sm">Active Landing Page Health Events</h4>
+                                <?php if (empty($dbPortalEventsList)): ?>
+                                    <p class="text-xs text-gray-400 italic py-2">No custom events stored yet. Default schedule will display.</p>
+                                <?php else: ?>
+                                    <div class="space-y-2">
+                                        <?php foreach ($dbPortalEventsList as $evt): ?>
+                                            <div class="p-3 rounded-xl border border-gray-100 bg-gray-50 flex items-start justify-between gap-3 text-xs">
+                                                <div class="flex items-start gap-3">
+                                                    <?php if (!empty($evt['image_url'])): ?>
+                                                        <div class="h-14 w-14 rounded-lg overflow-hidden shrink-0 bg-slate-200 border border-gray-200">
+                                                            <img src="<?php echo esc(portalImgUrl($evt['image_url'])); ?>" alt="<?php echo esc($evt['title']); ?>" class="w-full h-full object-cover" onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&w=100&q=80';">
+                                                        </div>
+                                                    <?php endif; ?>
+                                                    <div>
+                                                        <span class="px-2 py-0.5 rounded font-mono bg-gray-200 text-gray-800 font-bold text-[10px]"><?php echo esc($evt['event_date']); ?></span>
+                                                        <h5 class="font-bold text-gray-900 mt-1"><?php echo esc($evt['title']); ?></h5>
+                                                        <p class="text-xs font-semibold text-emerald-700"><?php echo esc($evt['venue']); ?></p>
+                                                        <p class="text-gray-500 mt-0.5"><?php echo esc($evt['description']); ?></p>
+                                                    </div>
+                                                </div>
+                                                <div class="flex items-center gap-1 shrink-0">
+                                                    <?php if (!empty($evt['image_url'])): ?>
+                                                        <form method="post" onsubmit="return confirm('Delete picture attached to this event?')">
+                                                            <input type="hidden" name="action" value="delete_event_picture">
+                                                            <input type="hidden" name="event_id" value="<?php echo $evt['id']; ?>">
+                                                            <button type="submit" class="px-2 py-1 bg-amber-50 text-amber-700 hover:bg-amber-100 rounded text-[10px] font-bold" title="Delete Cover Picture Only">
+                                                                Remove Picture
+                                                            </button>
+                                                        </form>
+                                                    <?php endif; ?>
+                                                    <form method="post" onsubmit="return confirm('Remove this health event and its picture?')">
+                                                        <input type="hidden" name="action" value="delete_event">
+                                                        <input type="hidden" name="event_id" value="<?php echo $evt['id']; ?>">
+                                                        <button type="submit" class="p-1.5 text-red-600 hover:bg-red-50 rounded" title="Delete Event">
+                                                            <?php echo iconSvg('trash', 'w-4 h-4'); ?>
+                                                        </button>
+                                                    </form>
+                                                </div>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 3. MUNICIPAL OFFICIALS MANAGEMENT PANEL -->
+                    <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-200 space-y-6">
+                        <div class="flex items-center justify-between border-b border-gray-100 pb-3">
+                            <div class="flex items-center gap-2">
+                                <span class="p-2 bg-blue-100 rounded-lg text-blue-700"><?php echo iconSvg('building', 'w-5 h-5'); ?></span>
+                                <div>
+                                    <h3 class="font-bold text-gray-900 text-base">Municipal Government Officials</h3>
+                                    <p class="text-xs text-gray-500">Manage LGU leaders displayed in the Municipal Leadership section of the Landing Page.</p>
+                                </div>
+                            </div>
+                            <span class="text-xs font-bold bg-blue-50 text-blue-700 px-3 py-1 rounded-full">Stored in Portal Settings</span>
+                        </div>
+
+                        <?php 
+                        $pSettings = portalSettings($pdo);
+                        $adminOfficialsList = [];
+                        if (!empty($pSettings['rhu_municipal_officials'])) {
+                            $adminOfficialsList = json_decode($pSettings['rhu_municipal_officials'], true) ?: [];
+                        }
+                        ?>
+
+                        <div class="grid md:grid-cols-12 gap-6">
+                            <!-- ADD OFFICIAL FORM -->
+                            <form method="post" class="md:col-span-5 space-y-3 text-xs bg-gray-50 p-4 rounded-xl border border-gray-200">
+                                <input type="hidden" name="action" value="add_official">
+                                <h4 class="font-bold text-gray-900 text-sm">Add New Municipal Official</h4>
+                                <div>
+                                    <label class="block font-bold text-gray-700 mb-1">Full Name & Honorific *</label>
+                                    <input required type="text" name="official_name" placeholder="e.g. Hon. Antonio Jose A. Barcelon" class="w-full p-2.5 rounded-lg border border-gray-300 bg-white">
+                                </div>
+                                <div>
+                                    <label class="block font-bold text-gray-700 mb-1">Official Position *</label>
+                                    <input required type="text" name="official_position" placeholder="e.g. Municipal Mayor" class="w-full p-2.5 rounded-lg border border-gray-300 bg-white">
+                                </div>
+                                <div>
+                                    <label class="block font-bold text-gray-700 mb-1">Office / Committee Designation</label>
+                                    <input type="text" name="official_office" placeholder="e.g. Office of the Municipal Mayor" class="w-full p-2.5 rounded-lg border border-gray-300 bg-white">
+                                </div>
+                                <button type="submit" class="w-full py-2.5 bg-blue-700 text-white rounded-lg font-bold hover:bg-blue-800 transition-all shadow-md">
+                                    Add Municipal Official
+                                </button>
+                            </form>
+
+                            <!-- OFFICIALS LIST DISPLAY -->
+                            <div class="md:col-span-7 space-y-3">
+                                <h4 class="font-bold text-gray-900 text-sm">Current Officials Displayed on Landing Page</h4>
+                                <?php if (empty($adminOfficialsList)): ?>
+                                    <p class="text-xs text-gray-400 italic py-2">No officials specified yet.</p>
+                                <?php else: ?>
+                                    <div class="grid sm:grid-cols-2 gap-3 max-h-80 overflow-y-auto pr-1">
+                                        <?php foreach ($adminOfficialsList as $idx => $off): ?>
+                                            <div class="p-3 rounded-xl border border-gray-200 bg-white shadow-xs flex items-center justify-between gap-2 text-xs">
+                                                <div>
+                                                    <h5 class="font-bold text-gray-900"><?php echo esc($off['name']); ?></h5>
+                                                    <p class="text-blue-700 font-semibold text-[11px]"><?php echo esc($off['position']); ?></p>
+                                                    <p class="text-gray-400 text-[10px]"><?php echo esc($off['office']); ?></p>
+                                                </div>
+                                                <form method="post" onsubmit="return confirm('Remove <?php echo esc($off['name']); ?> from Landing Page?')">
+                                                    <input type="hidden" name="action" value="delete_official">
+                                                    <input type="hidden" name="official_index" value="<?php echo $idx; ?>">
+                                                    <button type="submit" class="p-1.5 text-red-600 hover:bg-red-50 rounded shrink-0" title="Remove Official">
+                                                        <?php echo iconSvg('trash', 'w-4 h-4'); ?>
+                                                    </button>
+                                                </form>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </div>
+                                <?php endif; ?>
+                    <!-- 4. EVENT PHOTO GALLERY MANAGEMENT PANEL (Stored in portal_settings, no new DB table) -->
+                    <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-200 space-y-6">
+                        <div class="flex items-center justify-between border-b border-gray-100 pb-3">
+                            <div class="flex items-center gap-2">
+                                <span class="p-2 bg-purple-100 rounded-lg text-purple-700"><?php echo iconSvg('eye', 'w-5 h-5'); ?></span>
+                                <div>
+                                    <h3 class="font-bold text-gray-900 text-base">RHU Event Photo Gallery</h3>
+                                    <p class="text-xs text-gray-500">Upload or add photo links to the Event & Community Photo Gallery section on the Landing Page.</p>
+                                </div>
+                            </div>
+                            <span class="text-xs font-bold bg-purple-100 text-purple-800 px-3 py-1 rounded-full">Saved in Portal Settings</span>
+                        </div>
+
+                        <?php $eventGalleryList = getPortalEventGallery($pdo); ?>
+
+                        <div class="grid md:grid-cols-12 gap-6">
+                            <!-- ADD PHOTO FORM -->
+                            <form method="post" enctype="multipart/form-data" class="md:col-span-5 space-y-3 text-xs bg-gray-50 p-4 rounded-xl border border-gray-200">
+                                <input type="hidden" name="action" value="add_gallery_photo">
+                                <h4 class="font-bold text-gray-900 text-sm">Add Event Gallery Photo</h4>
+                                <div>
+                                    <label class="block font-bold text-gray-700 mb-1">Photo Title *</label>
+                                    <input required type="text" name="photo_title" placeholder="e.g. Free Dental Mission & Medical Checkup" class="w-full p-2.5 rounded-lg border border-gray-300 bg-white">
+                                </div>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label class="block font-bold text-gray-700 mb-1">Category</label>
+                                        <input type="text" name="photo_category" value="Community Health Drive" class="w-full p-2.5 rounded-lg border border-gray-300 bg-white">
+                                    </div>
+                                    <div>
+                                        <label class="block font-bold text-gray-700 mb-1">Date</label>
+                                        <input type="text" name="photo_date" value="<?php echo date('M Y'); ?>" class="w-full p-2.5 rounded-lg border border-gray-300 bg-white">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block font-bold text-gray-700 mb-1">Image File Upload or Image URL *</label>
+                                    <input type="file" name="gallery_file" accept="image/*" class="w-full p-1 rounded border border-gray-300 text-[11px] mb-2 bg-white">
+                                    <input type="text" name="image_url" placeholder="Or paste Image URL (e.g. https://...)" class="w-full p-2.5 rounded-lg border border-gray-300 bg-white">
+                                </div>
+                                <button type="submit" class="w-full py-2.5 bg-purple-700 text-white rounded-lg font-bold hover:bg-purple-800 transition-all shadow-md">
+                                    Add Photo to Landing Page Gallery
+                                </button>
+                            </form>
+
+                            <!-- GALLERY DISPLAY GRID -->
+                            <div class="md:col-span-7 space-y-3">
+                                <h4 class="font-bold text-gray-900 text-sm">Current Landing Page Gallery Photos</h4>
+                                <?php if (empty($eventGalleryList)): ?>
+                                    <p class="text-xs text-gray-400 italic py-2">No photos in gallery yet.</p>
+                                <?php else: ?>
+                                    <div class="grid sm:grid-cols-2 gap-3 max-h-96 overflow-y-auto pr-1">
+                                        <?php foreach ($eventGalleryList as $gIdx => $gItem): ?>
+                                            <div class="p-3 rounded-xl border border-gray-200 bg-white shadow-xs space-y-2 text-xs relative group">
+                                                <div class="h-28 w-full rounded-lg overflow-hidden bg-slate-100 border border-slate-100">
+                                                    <img src="<?php echo esc(portalImgUrl($gItem['image_url'])); ?>" alt="<?php echo esc($gItem['title']); ?>" class="w-full h-full object-cover group-hover:scale-105 transition-transform" onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&w=400&q=80';">
+                                                </div>
+                                                <div class="flex items-start justify-between gap-2">
+                                                    <div>
+                                                        <span class="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-bold text-[10px]"><?php echo esc($gItem['category'] ?? 'Event Photo'); ?></span>
+                                                        <h5 class="font-bold text-gray-900 mt-1 truncate max-w-[160px]"><?php echo esc($gItem['title']); ?></h5>
+                                                        <p class="text-[10px] text-gray-400"><?php echo esc($gItem['date'] ?? ''); ?></p>
+                                                    </div>
+                                                    <form method="post" onsubmit="return confirm('Remove photo from gallery?')">
+                                                        <input type="hidden" name="action" value="delete_gallery_photo">
+                                                        <input type="hidden" name="photo_index" value="<?php echo $gIdx; ?>">
+                                                        <button type="submit" class="p-1.5 text-red-600 hover:bg-red-50 rounded shrink-0" title="Delete Photo">
+                                                            <?php echo iconSvg('trash', 'w-4 h-4'); ?>
+                                                        </button>
+                                                    </form>
+                                                </div>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                        </div>
                     </div>
                 </div>
             <?php endif; ?>

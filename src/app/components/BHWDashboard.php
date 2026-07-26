@@ -58,7 +58,7 @@ function formatDate(string $date): string { return date('F j, Y', strtotime($dat
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BHW Dashboard - RedPulse RHU</title>
+  <title>BHW Dashboard - ResiHUnity RHU</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>body{font-family:ui-sans-serif,system-ui,sans-serif}.safe-area-pb{padding-bottom:env(safe-area-inset-bottom)}@media(max-width:639px){.desktop-tabs{display:none}}@media(min-width:640px){.mobile-tabs{display:none}}</style>
 </head>
@@ -67,7 +67,7 @@ function formatDate(string $date): string { return date('F j, Y', strtotime($dat
   <header class="sticky top-0 z-40 bg-gradient-to-r from-green-700 to-green-800 text-white shadow-lg">
     <div class="max-w-full px-4 py-3">
       <div class="flex items-center justify-between">
-        <div class="flex items-center gap-3"><div class="flex h-9 w-9 items-center justify-center rounded-xl bg-white/20 text-lg">♥</div><div><div class="flex items-center gap-2"><h1 class="text-base font-bold">RedPulse RHU</h1><span class="hidden rounded-full bg-green-600 px-2 py-0.5 text-xs text-green-100 sm:block">BHW Portal</span></div><p class="text-xs text-green-200">Barangay <?= esc($bhw['barangay']) ?> — <?= esc($bhw['name']) ?></p></div></div>
+        <div class="flex items-center gap-3"><div class="flex h-9 w-9 items-center justify-center rounded-xl bg-white/20 text-lg">♥</div><div><div class="flex items-center gap-2"><h1 class="text-base font-bold">ResiHUnity RHU</h1><span class="hidden rounded-full bg-green-600 px-2 py-0.5 text-xs text-green-100 sm:block">BHW Portal</span></div><p class="text-xs text-green-200">Barangay <?= esc($bhw['barangay']) ?> — <?= esc($bhw['name']) ?></p></div></div>
         <div class="flex items-center gap-2"><button type="button" class="relative rounded-lg p-2 hover:bg-green-600" aria-label="Notifications">♧<span class="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-400"></span></button><a href="LandingPage.php" class="rounded-lg p-2 hover:bg-green-600" aria-label="Log out">↪</a></div>
       </div>
       <nav class="desktop-tabs mt-2 gap-1 overflow-x-auto pb-0.5 sm:flex">

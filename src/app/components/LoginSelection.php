@@ -6,7 +6,7 @@ if (session_status() === PHP_SESSION_NONE) session_start();
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Staff & Admin Access - RedPulse RHU</title>
+    <title>Staff & Admin Access - ResiHUnity RHU</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gradient-to-br from-slate-900 via-slate-800 to-gray-900">
@@ -15,11 +15,9 @@ if (session_status() === PHP_SESSION_NONE) session_start();
 
             <!-- Header -->
             <div class="text-center mb-10">
-                <a href="LandingPage.php" class="inline-flex items-center justify-center gap-2 mb-5 group">
-                    <svg class="w-10 h-10 text-red-500 group-hover:scale-110 transition-transform" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
-                    </svg>
-                    <span class="text-3xl font-bold text-white">RedPulse RHU</span>
+                <a href="LandingPage.php" class="inline-flex items-center justify-center gap-3 mb-5 group">
+                    <img src="resihunity_logo.jpg" alt="ResiHUnity Logo" class="h-12 w-auto object-contain rounded-xl bg-white/10 p-1 shadow-md group-hover:scale-105 transition-transform" />
+                    <span class="text-3xl font-bold text-white">ResiHUnity RHU</span>
                 </a>
                 <div class="inline-flex items-center gap-2 bg-yellow-500/15 border border-yellow-500/30 rounded-full px-4 py-1.5 mb-4">
                     <svg class="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
