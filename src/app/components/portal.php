@@ -81,4 +81,16 @@ if (!function_exists('portalSettings')) {
             error_log('portalNotify: ' . $e->getMessage());
         }
     }
+
+    function portalNotifyResident(?PDO $pdo, int $residentId, string $message, ?string $link = null): void {
+        if (!$pdo) return;
+        try {
+            $statement = $pdo->prepare('SELECT u.id FROM residents r JOIN users u ON u.email = r.email WHERE r.id = :resident_id LIMIT 1');
+            $statement->execute(['resident_id' => $residentId]);
+            $userId = $statement->fetchColumn();
+            portalNotify($pdo, $message, $userId ? (int)$userId : null, $userId ? null : 'RESIDENT', $link);
+        } catch (PDOException $e) {
+            error_log('portalNotifyResident: ' . $e->getMessage());
+        }
+    }
 }
