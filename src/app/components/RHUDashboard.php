@@ -1,6 +1,15 @@
 <?php
 if (session_status() === PHP_SESSION_NONE) session_start();
 @include_once __DIR__ . '/db.php';
+require_once __DIR__ . '/portal.php';
+if (!empty($_SESSION['rhu_staff_login']) || !empty($_SESSION['bhw_user'])) {
+    // Remove stale elevated authorization left by a previous browser login.
+    unset($_SESSION['rhu_admin_authenticated'], $_SESSION['user']);
+}
+if (empty($_SESSION['rhu_staff_login']) && empty($_SESSION['bhw_user']) && empty($_SESSION['rhu_admin_authenticated'])) {
+    header('Location: RHULogin.php');
+    exit;
+}
 
 /**
  * Escape output for HTML.
@@ -94,6 +103,7 @@ $tabs = [
     'staff' => ['Staff Directory', 'users'],
     'reports' => ['DOH Reports (FHSIS)', 'bar'],
     'analytics' => ['Seasonal Analytics & Predictions', 'trend'],
+    'audit' => ['Audit Logs', 'database'],
 ];
 
 $tab = $_GET['tab'] ?? 'overview';
@@ -248,6 +258,35 @@ $monthlyBloodData = [
     ['month' => 'Jun', 'donations' => 62, 'transfusions' => 18, 'referrals' => 3],
 ];
 
+// Never display seeded/demo values in the live RHU Staff dashboard.
+// Every collection below is populated only by the database hydration block.
+$notifications = [];
+$mockDonors = [];
+$mockBloodRequests = [];
+$mockRHUInventory = [];
+$mockBloodDrives = [];
+$mockPatients = [];
+$mockTransfusions = [];
+$mockReferrals = [];
+$mockOPDConsultations = [];
+$mockImmunizations = [];
+$mockMaternalCases = [];
+$mockFPClients = [];
+$mockTBCases = [];
+$mockNutritionCases = [];
+$mockDiseaseReports = [];
+$mockVitalRecords = [];
+$mockMedicineInventory = [];
+$mockHealthCertificates = [];
+$mockSanitationInspections = [];
+$mockDOHReports = [];
+$mockRHUStaff = [];
+$mockBHWs = [];
+$mockDemandForecast = [];
+$weeklyOPDData = [];
+$diagnosisData = [];
+$monthlyBloodData = [];
+
 $totalInventory = 0;
 foreach ($mockRHUInventory as $item) {
     $totalInventory += $item['units'];
@@ -282,19 +321,90 @@ $allResidents = [];
 $allVaccines = [];
 $allCertTypes = [];
 $allStaff = [];
+$staffAuditLogs = [];
 
 // ----------------------------------------------------
 // 100% REAL DATABASE HYDRATION FROM MYSQL `rhu` TABLES
 // ----------------------------------------------------
 if (!empty($pdo)) {
     try {
+        $pdo->exec(
+            "CREATE TABLE IF NOT EXISTS family_planning_clients (
+                id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                resident_id BIGINT UNSIGNED NOT NULL,
+                method VARCHAR(100) NOT NULL,
+                acceptor_type VARCHAR(50) NOT NULL,
+                last_supply_date DATE NULL,
+                next_visit_date DATE NULL,
+                status VARCHAR(30) NOT NULL DEFAULT 'Active',
+                notes TEXT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_fp_resident (resident_id),
+                INDEX idx_fp_status (status)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+        $pdo->exec(
+            "CREATE TABLE IF NOT EXISTS sanitation_inspections (
+                id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                establishment VARCHAR(180) NOT NULL,
+                barangay VARCHAR(120) NOT NULL,
+                inspector_staff_id BIGINT UNSIGNED NULL,
+                inspection_date DATE NOT NULL,
+                next_inspection_date DATE NULL,
+                status VARCHAR(40) NOT NULL,
+                compliance_rate DECIMAL(5,2) NULL,
+                violations INT UNSIGNED NOT NULL DEFAULT 0,
+                findings TEXT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_sanitation_barangay (barangay),
+                INDEX idx_sanitation_date (inspection_date)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+
         $allResidents = $pdo->query("SELECT id, CONCAT(first_name, ' ', last_name) as name, barangay FROM residents ORDER BY first_name ASC")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $RHU_INFO['totalPopulation'] = count($allResidents);
+        $RHU_INFO['catchmentBarangays'] = array_values(array_unique(array_filter(array_column($allResidents, 'barangay'))));
         $allVaccines = $pdo->query("SELECT id, vaccine_name, age_group FROM immunization_schedules ORDER BY vaccine_name ASC")->fetchAll(PDO::FETCH_ASSOC) ?: [];
         $allCertTypes = $pdo->query("SELECT id, certificate_type_name FROM certificate_types ORDER BY certificate_type_name ASC")->fetchAll(PDO::FETCH_ASSOC) ?: [];
         $allStaff = $pdo->query("SELECT s.id, CONCAT(u.first_name, ' ', u.last_name) as name, s.staff_type FROM staff s JOIN users u ON s.user_id = u.id ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $staffAuditLogs = $pdo->query(
+            "SELECT a.id,a.action,a.entity_type,a.entity_id,a.ip_address,a.timestamp AS created_at,
+                    COALESCE(NULLIF(CONCAT(u.first_name,' ',u.last_name),' '),u.email,'System') actor
+             FROM audit_logs a LEFT JOIN users u ON u.id=a.user_id
+             ORDER BY a.timestamp DESC LIMIT 200"
+        )->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        $settingsRows = $pdo->query("SELECT setting_key, setting_value FROM portal_settings")->fetchAll(PDO::FETCH_KEY_PAIR) ?: [];
+        $RHU_INFO['name'] = $settingsRows['rhu_name'] ?? $RHU_INFO['name'];
+        $RHU_INFO['municipality'] = $settingsRows['rhu_municipality'] ?? $RHU_INFO['municipality'];
+        $RHU_INFO['province'] = $settingsRows['rhu_province'] ?? $RHU_INFO['province'];
+        $RHU_INFO['address'] = $settingsRows['rhu_address'] ?? $RHU_INFO['address'];
+        $RHU_INFO['contactNumber'] = $settingsRows['rhu_contact'] ?? $RHU_INFO['contactNumber'];
+        $RHU_INFO['email'] = $settingsRows['rhu_email'] ?? $RHU_INFO['email'];
+        $RHU_INFO['chiefMHO'] = $settingsRows['rhu_mho_name'] ?? $RHU_INFO['chiefMHO'];
+
+        $notificationRows = $pdo->query(
+            "SELECT id, message, is_read, created_at
+             FROM portal_notifications
+             WHERE audience_role IS NULL
+                OR audience_role IN ('RHU_STAFF','ADMIN_STAFF','PHYSICIAN','NURSE','MIDWIFE','MEDTECH','SANITARY_INSPECTOR')
+             ORDER BY created_at DESC LIMIT 20"
+        )->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        foreach ($notificationRows as $notification) {
+            $notifications[] = [
+                'id' => (int)$notification['id'],
+                'title' => 'RHU Notification',
+                'message' => $notification['message'],
+                'time' => date('M j, Y g:i A', strtotime($notification['created_at'])),
+                'unread' => !(bool)$notification['is_read'],
+                'type' => 'information',
+            ];
+        }
 
         // 1. OPD Consultations (consultations + residents + staff + users)
-        $dbOpdStmt = $pdo->query("SELECT c.id, CONCAT(r.first_name, ' ', r.last_name) AS patientName, TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) as age, r.gender, c.chief_complaint as chiefComplaint, c.diagnosis, c.icd_code as icd10, c.medications_prescribed as medications, r.barangay, c.consultation_date as date, CONCAT(doc_u.first_name, ' ', doc_u.last_name) as physicianName FROM consultations c JOIN residents r ON c.resident_id = r.id LEFT JOIN staff doc_s ON c.physician_id = doc_s.id LEFT JOIN users doc_u ON doc_s.user_id = doc_u.id ORDER BY c.id DESC");
+        $dbOpdStmt = $pdo->query("SELECT c.id, CONCAT(r.first_name, ' ', r.last_name) AS patientName, TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) as age, r.gender, c.chief_complaint as chiefComplaint, c.diagnosis, c.icd_code as icd10, c.medications_prescribed as medications, r.barangay, r.philhealth_id, c.consultation_date as date, c.consultation_status, c.referral_needed, CONCAT(doc_u.first_name, ' ', doc_u.last_name) as physicianName FROM consultations c JOIN residents r ON c.resident_id = r.id LEFT JOIN staff doc_s ON c.physician_id = doc_s.id LEFT JOIN users doc_u ON doc_s.user_id = doc_u.id ORDER BY c.id DESC");
         $dbOpd = $dbOpdStmt->fetchAll(PDO::FETCH_ASSOC);
         if (!empty($dbOpd)) {
             $formattedOpd = [];
@@ -302,18 +412,18 @@ if (!empty($pdo)) {
                 $formattedOpd[] = [
                     'id' => 'C-' . $co['id'],
                     'patientName' => $co['patientName'],
-                    'age' => (int)($co['age'] ?: 25),
+                    'age' => $co['age'] === null ? null : (int)$co['age'],
                     'gender' => substr($co['gender'] ?: 'F', 0, 1),
-                    'diagnosis' => $co['diagnosis'] ?: 'Outpatient Consult',
-                    'barangay' => $co['barangay'] ?: 'Nasugbu',
-                    'physician' => $co['physicianName'] ? 'Dr. ' . $co['physicianName'] : 'RHU Attending Physician',
-                    'date' => $co['date'] ?: date('Y-m-d'),
-                    'disposition' => 'outpatient',
-                    'philhealthCharged' => true,
-                    'vitals' => ['bp' => '120/80', 'temp' => 36.8, 'weight' => '55kg', 'rr' => 18, 'hr' => 78],
-                    'chiefComplaint' => $co['chiefComplaint'] ?: 'General Consult',
-                    'icd10' => $co['icd10'] ?: 'J00',
-                    'medications' => array_filter(explode(',', $co['medications'] ?: 'Paracetamol'))
+                    'diagnosis' => $co['diagnosis'] ?: 'Not recorded',
+                    'barangay' => $co['barangay'] ?: 'Not recorded',
+                    'physician' => trim((string)$co['physicianName']) ?: 'Not assigned',
+                    'date' => $co['date'],
+                    'disposition' => !empty($co['referral_needed']) ? 'referred' : strtolower((string)($co['consultation_status'] ?: 'not recorded')),
+                    'philhealthCharged' => !empty($co['philhealth_id']),
+                    'vitals' => ['bp' => 'Not recorded', 'temp' => 'Not recorded', 'weight' => 'Not recorded', 'rr' => 'Not recorded', 'hr' => 'Not recorded'],
+                    'chiefComplaint' => $co['chiefComplaint'] ?: 'Not recorded',
+                    'icd10' => $co['icd10'] ?: 'Not recorded',
+                    'medications' => array_filter(array_map('trim', explode(',', (string)$co['medications'])))
                 ];
             }
             $mockOPDConsultations = $formattedOpd;
@@ -328,22 +438,39 @@ if (!empty($pdo)) {
                 $formattedRef[] = [
                     'id' => 'REF-' . $rf['id'],
                     'patientName' => $rf['patientName'],
-                    'age' => (int)($rf['age'] ?: 30),
+                    'age' => $rf['age'] === null ? null : (int)$rf['age'],
                     'gender' => $rf['gender'] ?: 'Female',
-                    'diagnosis' => $rf['diagnosis'] ?: 'Emergency Outpatient Evaluation',
-                    'referredTo' => $rf['referredTo'] ?: 'Nasugbu District Hospital',
-                    'urgency' => 'urgent',
+                    'diagnosis' => $rf['diagnosis'] ?: 'Not recorded',
+                    'referredTo' => $rf['referredTo'] ?: 'Not recorded',
+                    'urgency' => 'not recorded',
                     'status' => 'pending',
-                    'referralDate' => $rf['referralDate'] ?: date('Y-m-d'),
-                    'referringMD' => $rf['referringMD'] ? 'Dr. ' . $rf['referringMD'] : 'RHU Municipal Health Officer',
-                    'reason' => $rf['reason'] ?: 'Requires tertiary clinical diagnostic evaluation.'
+                    'referralDate' => $rf['referralDate'],
+                    'referringMD' => trim((string)$rf['referringMD']) ?: 'Not assigned',
+                    'reason' => $rf['reason'] ?: 'Not recorded'
                 ];
             }
             $mockReferrals = $formattedRef;
         }
 
         // 3. TB-DOTS (tb_patients + residents + staff + users)
-        $dbTbStmt = $pdo->query("SELECT t.id, CONCAT(r.first_name, ' ', r.last_name) AS name, TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) as age, r.gender, t.tb_registration_number as regNo, t.tb_type as classification, r.barangay, t.treatment_status as outcome, t.treatment_start_date as treatmentStartDate, CONCAT(doc_u.first_name, ' ', doc_u.last_name) as providerName FROM tb_patients t JOIN residents r ON t.resident_id = r.id LEFT JOIN staff doc_s ON t.dots_provider_id = doc_s.id LEFT JOIN users doc_u ON doc_s.user_id = doc_u.id ORDER BY t.id DESC");
+        $dbTbStmt = $pdo->query(
+            "SELECT t.id, CONCAT(r.first_name, ' ', r.last_name) AS name,
+                    TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) AS age,
+                    r.gender, t.tb_registration_number AS regNo, t.tb_type AS classification,
+                    r.barangay, t.treatment_status AS outcome,
+                    t.treatment_start_date AS treatmentStartDate,
+                    CONCAT(doc_u.first_name, ' ', doc_u.last_name) AS providerName,
+                    COALESCE(SUM(ta.dose_count), 0) AS totalDoses,
+                    COALESCE(SUM(ta.missed_doses), 0) AS missedDoses,
+                    MAX(ta.tracking_date) AS lastTracking
+             FROM tb_patients t
+             JOIN residents r ON t.resident_id = r.id
+             LEFT JOIN staff doc_s ON t.dots_provider_id = doc_s.id
+             LEFT JOIN users doc_u ON doc_s.user_id = doc_u.id
+             LEFT JOIN tb_adherence_tracking ta ON ta.tb_patient_id = t.id
+             GROUP BY t.id
+             ORDER BY t.id DESC"
+        );
         $dbTb = $dbTbStmt->fetchAll(PDO::FETCH_ASSOC);
         if (!empty($dbTb)) {
             $formattedTb = [];
@@ -352,29 +479,43 @@ if (!empty($pdo)) {
                     'id' => 'TB-' . $tb['id'],
                     'name' => $tb['name'],
                     'regNo' => $tb['regNo'] ?: 'TB-NSG-2026-00' . $tb['id'],
-                    'age' => (int)($tb['age'] ?: 40),
-                    'gender' => $tb['gender'] ?: 'Male',
-                    'classification' => $tb['classification'] ?: 'Pulmonary TB',
-                    'barangay' => $tb['barangay'] ?: 'Nasugbu',
-                    'supporter' => $tb['providerName'] ?: 'BHW Assigned',
+                    'age' => $tb['age'] === null ? null : (int)$tb['age'],
+                    'gender' => $tb['gender'] ?: 'Not recorded',
+                    'classification' => $tb['classification'] ?: 'Not recorded',
+                    'barangay' => $tb['barangay'] ?: 'Not recorded',
+                    'supporter' => trim((string)$tb['providerName']) ?: 'Not assigned',
                     'outcome' => strtolower($tb['outcome']) === 'ongoing' || strtolower($tb['outcome']) === 'active' ? 'on_treatment' : 'cured',
-                    'caseType' => 'New',
-                    'phase' => 'Intensive',
-                    'monthsCompleted' => 2,
+                    'caseType' => 'Not recorded',
+                    'phase' => $tb['treatmentStartDate'] && strtotime($tb['treatmentStartDate']) > strtotime('-2 months') ? 'Intensive' : 'Continuation',
+                    'monthsCompleted' => $tb['treatmentStartDate'] ? max(0, (int)floor((time() - strtotime($tb['treatmentStartDate'])) / 2592000)) : 0,
                     'totalMonths' => 6,
-                    'adherence' => 95,
-                    'treatmentRegimen' => '2HRZE/4HR',
-                    'treatmentStartDate' => $tb['treatmentStartDate'] ?: date('Y-m-d'),
-                    'weight' => '58kg',
-                    'nextCollection' => date('Y-m-d', strtotime('+14 days')),
-                    'sputumResults' => [['date' => date('Y-m-d'), 'result' => 'Negative']]
+                    'adherence' => (int)$tb['totalDoses'] > 0 ? round((((int)$tb['totalDoses'] - (int)$tb['missedDoses']) / (int)$tb['totalDoses']) * 100) : 0,
+                    'treatmentRegimen' => 'Not recorded',
+                    'treatmentStartDate' => $tb['treatmentStartDate'],
+                    'weight' => 'Not recorded',
+                    'nextCollection' => null,
+                    'sputumResults' => []
                 ];
             }
             $mockTBCases = $formattedTb;
         }
 
         // 4. Maternal Health (pregnancies + residents + prenatal_visits)
-        $dbMatStmt = $pdo->query("SELECT p.id, CONCAT(r.first_name, ' ', r.last_name) AS name, TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) as age, r.barangay, p.last_menstrual_period as lmp, p.expected_delivery_date as edc, r.blood_type as bloodType, p.high_risk as riskLevel, p.risk_factors as riskFactors, p.pregnancy_status as status FROM pregnancies p JOIN residents r ON p.resident_id = r.id ORDER BY p.id DESC");
+        $dbMatStmt = $pdo->query(
+            "SELECT p.id, CONCAT(r.first_name, ' ', r.last_name) AS name,
+                    TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) AS age,
+                    r.barangay, r.philhealth_id,
+                    p.last_menstrual_period AS lmp, p.expected_delivery_date AS edc,
+                    r.blood_type AS bloodType, p.high_risk AS riskLevel,
+                    p.risk_factors AS riskFactors, p.pregnancy_status AS status,
+                    COUNT(pv.id) AS prenatalVisits, MAX(pv.visit_date) AS lastVisit,
+                    MIN(CASE WHEN pv.next_visit_date >= CURDATE() THEN pv.next_visit_date END) AS nextVisit
+             FROM pregnancies p
+             JOIN residents r ON p.resident_id = r.id
+             LEFT JOIN prenatal_visits pv ON pv.pregnancy_id = p.id
+             GROUP BY p.id
+             ORDER BY p.id DESC"
+        );
         $dbMat = $dbMatStmt->fetchAll(PDO::FETCH_ASSOC);
         if (!empty($dbMat)) {
             $formattedMat = [];
@@ -382,32 +523,32 @@ if (!empty($pdo)) {
                 $formattedMat[] = [
                     'id' => 'M-' . $pm['id'],
                     'name' => $pm['name'],
-                    'age' => (int)($pm['age'] ?: 26),
-                    'barangay' => $pm['barangay'] ?: 'Halang',
-                    'gravida' => 1,
-                    'para' => 0,
-                    'aog' => '24 wks',
-                    'lmp' => $pm['lmp'] ?: '2026-01-25',
-                    'edc' => $pm['edc'] ?: '2026-10-25',
-                    'bloodType' => $pm['bloodType'] ?: 'A+',
-                    'prenatalVisits' => 4,
-                    'midwife' => 'Danica Yuan (Midwife)',
-                    'deliveryPlan' => 'Facility-based Lying-in',
+                    'age' => $pm['age'] === null ? null : (int)$pm['age'],
+                    'barangay' => $pm['barangay'] ?: 'Not recorded',
+                    'gravida' => null,
+                    'para' => null,
+                    'aog' => $pm['lmp'] ? max(0, (int)floor((time() - strtotime($pm['lmp'])) / 604800)) . ' wks' : 'Not recorded',
+                    'lmp' => $pm['lmp'],
+                    'edc' => $pm['edc'],
+                    'bloodType' => $pm['bloodType'] ?: 'Not recorded',
+                    'prenatalVisits' => (int)$pm['prenatalVisits'],
+                    'midwife' => 'Not assigned',
+                    'deliveryPlan' => 'Not recorded',
                     'riskLevel' => ((int)$pm['riskLevel'] === 1 || strtolower((string)$pm['riskLevel']) === 'high') ? 'high' : 'low',
                     'riskFactors' => $pm['riskFactors'] ?: 'Gestational Monitoring',
-                    'status' => 'active_prenatal',
-                    'philhealthStatus' => 'enrolled',
-                    'lastVisit' => date('Y-m-d', strtotime('-7 days')),
-                    'nextVisit' => date('Y-m-d', strtotime('+14 days')),
-                    'labResults' => ['CBC' => 'Normal', 'HBsAg' => 'Non-Reactive'],
-                    'supplements' => ['Folic Acid', 'Iron']
+                    'status' => strtolower((string)$pm['status']) === 'active' ? 'active_prenatal' : strtolower((string)$pm['status']),
+                    'philhealthStatus' => $pm['philhealth_id'] ? 'enrolled' : 'not recorded',
+                    'lastVisit' => $pm['lastVisit'],
+                    'nextVisit' => $pm['nextVisit'],
+                    'labResults' => [],
+                    'supplements' => []
                 ];
             }
             $mockMaternalCases = $formattedMat;
         }
 
         // 5. Medicine Inventory (medicine_inventory)
-        $dbMedStmt = $pdo->query("SELECT id, generic_name as genericName, brand_name as brandName, dosage, unit_form as form, quantity_in_stock as stock, reorder_level as reorderLevel, expiry_date as expiryDate, batch_number as batchNo FROM medicine_inventory ORDER BY id DESC");
+        $dbMedStmt = $pdo->query("SELECT m.id, m.generic_name as genericName, m.brand_name as brandName, m.dosage, m.unit_form as form, m.quantity_in_stock as stock, m.reorder_level as reorderLevel, m.expiry_date as expiryDate, m.batch_number as batchNo, m.supplier, COALESCE(SUM(CASE WHEN st.transaction_type IN ('OUT','Dispensed','Issue') AND st.transaction_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN st.quantity ELSE 0 END), 0) AS usage30days FROM medicine_inventory m LEFT JOIN stock_transactions st ON st.medicine_id = m.id GROUP BY m.id ORDER BY m.id DESC");
         $dbMeds = $dbMedStmt->fetchAll(PDO::FETCH_ASSOC);
         if (!empty($dbMeds)) {
             $formattedMeds = [];
@@ -415,24 +556,24 @@ if (!empty($pdo)) {
                 $formattedMeds[] = [
                     'id' => 'MED-' . $m['id'],
                     'genericName' => $m['genericName'],
-                    'brandName' => $m['brandName'] ?: $m['genericName'],
-                    'form' => ($m['dosage'] ? $m['dosage'] . ' ' : '') . ($m['form'] ?: 'Tablet'),
-                    'category' => 'Essential Primary Care Medicine',
+                    'brandName' => $m['brandName'] ?: 'Not recorded',
+                    'form' => trim(($m['dosage'] ? $m['dosage'] . ' ' : '') . ($m['form'] ?: '')),
+                    'category' => 'Not recorded',
                     'stock' => (int)$m['stock'],
                     'reorderLevel' => (int)$m['reorderLevel'],
                     'status' => (int)$m['stock'] <= 15 ? 'critical' : ((int)$m['stock'] <= 30 ? 'low' : 'adequate'),
-                    'expiryDate' => $m['expiryDate'] ?: date('Y-m-d', strtotime('+1 year')),
-                    'batchNo' => $m['batchNo'] ?: 'B-2026-101',
-                    'source' => 'DOH Supply Chain',
-                    'usage30days' => 120,
-                    'unit' => 'tabs'
+                    'expiryDate' => $m['expiryDate'],
+                    'batchNo' => $m['batchNo'] ?: 'Not recorded',
+                    'source' => $m['supplier'] ?: 'Not recorded',
+                    'usage30days' => (int)$m['usage30days'],
+                    'unit' => $m['form'] ?: 'units'
                 ];
             }
             $mockMedicineInventory = $formattedMeds;
         }
 
         // 6. Disease Surveillance (disease_cases + disease_types + residents)
-        $dbDisStmt = $pdo->query("SELECT c.id, dt.disease_name as disease, dt.icd_code as icd10, c.case_classification as status, c.outcome, r.barangay FROM disease_cases c JOIN disease_types dt ON c.disease_id = dt.id JOIN residents r ON c.resident_id = r.id ORDER BY c.id DESC");
+        $dbDisStmt = $pdo->query("SELECT c.id, dt.disease_name as disease, dt.icd_code as icd10, c.case_date, c.case_classification as status, c.case_status, c.outcome, c.treatment, c.reported_to_doh, r.barangay FROM disease_cases c JOIN disease_types dt ON c.disease_id = dt.id JOIN residents r ON c.resident_id = r.id ORDER BY c.id DESC");
         $dbDis = $dbDisStmt->fetchAll(PDO::FETCH_ASSOC);
         if (!empty($dbDis)) {
             $formattedDis = [];
@@ -440,21 +581,21 @@ if (!empty($pdo)) {
                 $formattedDis[] = [
                     'id' => 'DS-' . $dc['id'],
                     'disease' => $dc['disease'],
-                    'icd10' => $dc['icd10'] ?: 'A90',
-                    'reportingWeek' => '2026-W29',
+                    'icd10' => $dc['icd10'] ?: 'Not recorded',
+                    'reportingWeek' => $dc['case_date'] ? date('o-\WW', strtotime($dc['case_date'])) : 'Not recorded',
                     'cases' => 1,
                     'deaths' => strtolower($dc['outcome']) === 'deceased' ? 1 : 0,
-                    'barangays' => [$dc['barangay'] ?: 'Halang'],
-                    'actionTaken' => 'Surveillance active and community fogging / vector control',
-                    'status' => $dc['status'] ?: 'Confirmed',
-                    'alert' => true
+                    'barangays' => [$dc['barangay'] ?: 'Not recorded'],
+                    'actionTaken' => $dc['treatment'] ?: 'Not recorded',
+                    'status' => $dc['case_status'] ?: $dc['status'] ?: 'Not recorded',
+                    'alert' => !(bool)$dc['reported_to_doh']
                 ];
             }
             $mockDiseaseReports = $formattedDis;
         }
 
         // 7. Vital Statistics (vital_statistics_births & vital_statistics_deaths + residents)
-        $dbVitStmt = $pdo->query("SELECT b.id, 'Birth' as type, b.child_name AS name, CONCAT(r.first_name, ' ', r.last_name) AS motherName, r.barangay, b.date_of_birth as date, b.birth_certificate_number as certNo, b.birth_weight_kg as weight FROM vital_statistics_births b JOIN residents r ON b.mother_id = r.id ORDER BY b.id DESC");
+        $dbVitStmt = $pdo->query("SELECT b.id, 'Birth' as type, b.child_name AS name, CONCAT(r.first_name, ' ', r.last_name) AS motherName, b.father_name AS fatherName, r.barangay, b.date_of_birth as date, b.birth_certificate_number as certNo, b.birth_weight_kg as weight, b.place_of_birth, b.registered_date, CONCAT(u.first_name, ' ', u.last_name) AS attendant FROM vital_statistics_births b JOIN residents r ON b.mother_id = r.id LEFT JOIN staff s ON s.id = b.delivery_attendant_id LEFT JOIN users u ON u.id = s.user_id ORDER BY b.id DESC");
         $dbVit = $dbVitStmt->fetchAll(PDO::FETCH_ASSOC);
         if (!empty($dbVit)) {
             $formattedVit = [];
@@ -464,13 +605,13 @@ if (!empty($pdo)) {
                     'type' => 'Birth',
                     'name' => $v['name'],
                     'motherName' => $v['motherName'],
-                    'fatherName' => 'Resident Father',
-                    'barangay' => $v['barangay'] ?: 'Poblacion',
-                    'date' => $v['date'] ?: date('Y-m-d'),
-                    'attendant' => 'Danica Yuan (Midwife)',
-                    'registrationStatus' => 'registered',
-                    'lncrn' => $v['certNo'] ?: 'LNCRN-2026-00' . $v['id'],
-                    'remarks' => 'Facility-based birth (' . ($v['weight'] ? $v['weight'] . 'kg' : '3.1kg') . ')'
+                    'fatherName' => $v['fatherName'] ?: 'Not recorded',
+                    'barangay' => $v['barangay'] ?: 'Not recorded',
+                    'date' => $v['date'],
+                    'attendant' => trim((string)$v['attendant']) ?: 'Not assigned',
+                    'registrationStatus' => $v['registered_date'] ? 'registered' : 'pending',
+                    'lncrn' => $v['certNo'] ?: 'Pending',
+                    'remarks' => trim(($v['place_of_birth'] ?: 'Place not recorded') . ($v['weight'] ? ' · ' . $v['weight'] . 'kg' : ''))
                 ];
             }
             $mockVitalRecords = $formattedVit;
@@ -490,8 +631,8 @@ if (!empty($pdo)) {
                     'vaccineName' => $im['vaccineName'],
                     'dose' => $im['targetAge'] ?: 'EPI Schedule',
                     'dateGiven' => $im['dateGiven'] ?: date('Y-m-d'),
-                    'lot' => $im['lot'] ?: 'LOT-2026-01',
-                    'administeredBy' => $im['providerName'] ?: 'RHU Nurse / Midwife',
+                    'lot' => $im['lot'] ?: 'Not recorded',
+                    'administeredBy' => trim((string)$im['providerName']) ?: 'Not assigned',
                     'status' => 'Administered'
                 ];
             }
@@ -499,21 +640,23 @@ if (!empty($pdo)) {
         }
 
         // 9. DOH Reports (fhsis_reports)
-        $dbFhsisStmt = $pdo->query("SELECT id, report_month as month, report_year as year, submitted_date, status FROM fhsis_reports ORDER BY id DESC");
+        $dbFhsisStmt = $pdo->query("SELECT id, report_month as month, report_year as year, submitted_date, report_data, status FROM fhsis_reports ORDER BY id DESC");
         $dbFhsis = $dbFhsisStmt->fetchAll(PDO::FETCH_ASSOC);
         if (!empty($dbFhsis)) {
             $formattedRpt = [];
             foreach ($dbFhsis as $fr) {
+                $reportData = json_decode((string)($fr['report_data'] ?? ''), true);
+                $reportData = is_array($reportData) ? $reportData : [];
                 $formattedRpt[] = [
                     'id' => 'DR-' . $fr['id'],
                     'reportType' => 'Monthly FHSIS Health Report',
                     'period' => date('F Y', mktime(0, 0, 0, (int)$fr['month'], 1, (int)$fr['year'])),
                     'generatedDate' => $fr['submitted_date'] ?: date('Y-m-d'),
-                    'totalDonations' => 0,
-                    'totalUnitsCollected' => 0,
-                    'totalTransfusions' => 0,
-                    'totalReferrals' => 14,
-                    'bloodDrivesConducted' => 0,
+                    'residents' => (int)($reportData['residents'] ?? 0),
+                    'consultations' => (int)($reportData['consultations'] ?? 0),
+                    'vaccinations' => (int)($reportData['vaccinations'] ?? 0),
+                    'diseaseCases' => (int)($reportData['disease_cases'] ?? 0),
+                    'totalReferrals' => (int)($reportData['referrals'] ?? 0),
                     'status' => strtolower($fr['status'])
                 ];
             }
@@ -528,23 +671,23 @@ if (!empty($pdo)) {
             foreach ($dbCerts as $c) {
                 $formattedCerts[] = [
                     'id' => 'HC-' . $c['id'],
-                    'certNo' => $c['certNo'] ?: 'C-2026-' . $c['id'],
-                    'type' => $c['type'] ?: 'Medical Certificate',
+                    'certNo' => $c['certNo'] ?: 'Pending',
+                    'type' => $c['type'] ?: 'Not recorded',
                     'recipientName' => $c['recipientName'],
-                    'age' => (int)($c['age'] ?: 32),
-                    'barangay' => $c['barangay'] ?: 'Nasugbu',
-                    'purpose' => $c['purpose'] ?: 'Employment Requirement',
-                    'issuedBy' => $c['issuerName'] ? 'Dr. ' . $c['issuerName'] : 'Dr. Maria C. Santos (MHO)',
-                    'issuedDate' => $c['issuedDate'] ?: date('Y-m-d'),
-                    'validUntil' => $c['validUntil'] ?: date('Y-m-d', strtotime('+6 months')),
-                    'fee' => 50
+                    'age' => $c['age'] === null ? null : (int)$c['age'],
+                    'barangay' => $c['barangay'] ?: 'Not recorded',
+                    'purpose' => $c['purpose'] ?: 'Not recorded',
+                    'issuedBy' => trim((string)$c['issuerName']) ?: 'Not assigned',
+                    'issuedDate' => $c['issuedDate'],
+                    'validUntil' => $c['validUntil'],
+                    'fee' => null
                 ];
             }
             $mockHealthCertificates = $formattedCerts;
         }
 
         // 11. Staff Accounts (staff + users)
-        $dbStaffStmt = $pdo->query("SELECT s.id, CONCAT(u.first_name, ' ', u.last_name) AS name, s.staff_type as position, u.email, s.license_number as licenseNo, s.is_active FROM staff s JOIN users u ON s.user_id = u.id ORDER BY s.id DESC");
+        $dbStaffStmt = $pdo->query("SELECT s.id, CONCAT(u.first_name, ' ', u.last_name) AS name, s.staff_type as position, u.email, s.license_number as licenseNo, s.license_expiry, s.is_active FROM staff s JOIN users u ON s.user_id = u.id ORDER BY s.id DESC");
         $dbStaff = $dbStaffStmt->fetchAll(PDO::FETCH_ASSOC);
         if (!empty($dbStaff)) {
             $formattedStaff = [];
@@ -555,7 +698,7 @@ if (!empty($pdo)) {
                     'position' => $st['position'],
                     'email' => $st['email'],
                     'licenseNo' => $st['licenseNo'] ?: 'MD-2026-101',
-                    'prcExpiry' => '2028-12-31',
+                    'prcExpiry' => $st['license_expiry'],
                     'status' => $st['is_active'] ? 'active' : 'inactive'
                 ];
             }
@@ -573,35 +716,132 @@ if (!empty($pdo)) {
                     'id' => 'BHW-' . sprintf('%03d', $bh['bhw_id']),
                     'name' => $displayName,
                     'barangay' => $bh['barangay'] ?: 'Nasugbu',
-                    'contactNo' => $bh['contactNo'] ?: '0917 111 2222',
+                    'contactNo' => $bh['contactNo'] ?: 'Not recorded',
                     'activeStatus' => (bool)$bh['is_active'],
                     'donorsReferred' => 0,
-                    'householdsAssigned' => (int)($bh['householdsAssigned'] ?: 50),
-                    'trainingLevel' => 'Senior BHW',
+                    'householdsAssigned' => (int)($bh['householdsAssigned'] ?? 0),
+                    'trainingLevel' => 'Not recorded',
                     'lastTraining' => $bh['assigned_date'] ?: date('Y-m-d')
                 ];
             }
             $mockBHWs = $formattedBhw;
         }
 
-        // 13. Nutrition & OPT+ (resident_health_profiles + residents)
-        $dbNutrStmt = $pdo->query("SELECT hp.id, CONCAT(r.first_name, ' ', r.last_name) as childName, TIMESTAMPDIFF(MONTH, r.date_of_birth, CURDATE()) as ageMonths, r.barangay, hp.height, hp.weight FROM resident_health_profiles hp JOIN residents r ON hp.resident_id = r.id ORDER BY hp.id DESC");
+        // 13. Family Planning (family_planning_clients + residents)
+        $dbFpStmt = $pdo->query(
+            "SELECT fp.id, CONCAT(r.first_name, ' ', r.last_name) AS name,
+                    TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) AS age,
+                    r.barangay, fp.method, fp.acceptor_type, fp.last_supply_date,
+                    fp.next_visit_date, fp.status
+             FROM family_planning_clients fp
+             JOIN residents r ON r.id = fp.resident_id
+             ORDER BY fp.id DESC"
+        );
+        foreach ($dbFpStmt->fetchAll(PDO::FETCH_ASSOC) as $client) {
+            $mockFPClients[] = [
+                'id' => 'FP-' . $client['id'],
+                'name' => $client['name'],
+                'age' => (int)$client['age'],
+                'barangay' => $client['barangay'],
+                'method' => $client['method'],
+                'acceptorType' => strtolower($client['acceptor_type']),
+                'lastSupply' => $client['last_supply_date'],
+                'nextVisit' => $client['next_visit_date'],
+                'status' => strtolower($client['status']),
+            ];
+        }
+
+        // 14. Sanitation inspections
+        $dbInspectionStmt = $pdo->query(
+            "SELECT si.id, si.establishment, si.barangay, si.inspection_date,
+                    si.next_inspection_date, si.status, si.compliance_rate,
+                    si.violations, si.findings,
+                    CONCAT(u.first_name, ' ', u.last_name) AS inspector
+             FROM sanitation_inspections si
+             LEFT JOIN staff s ON s.id = si.inspector_staff_id
+             LEFT JOIN users u ON u.id = s.user_id
+             ORDER BY si.id DESC"
+        );
+        foreach ($dbInspectionStmt->fetchAll(PDO::FETCH_ASSOC) as $inspection) {
+            $mockSanitationInspections[] = [
+                'id' => 'SI-' . $inspection['id'],
+                'establishment' => $inspection['establishment'],
+                'barangay' => $inspection['barangay'],
+                'inspector' => trim((string)$inspection['inspector']) ?: 'Not assigned',
+                'inspectionDate' => $inspection['inspection_date'],
+                'nextInspection' => $inspection['next_inspection_date'],
+                'status' => strtolower($inspection['status']),
+                'complianceRate' => $inspection['compliance_rate'] === null ? 0 : (float)$inspection['compliance_rate'],
+                'violations' => (int)$inspection['violations'],
+                'findings' => $inspection['findings'] ? preg_split('/\r\n|\r|\n/', $inspection['findings']) : [],
+            ];
+        }
+
+        // 15. Nutrition & OPT+ (resident_health_profiles + residents)
+        $dbNutrStmt = $pdo->query("SELECT hp.id, CONCAT(r.first_name, ' ', r.last_name) as childName, TIMESTAMPDIFF(MONTH, r.date_of_birth, CURDATE()) as ageMonths, r.barangay, hp.height, hp.weight, hp.last_checkup_date FROM resident_health_profiles hp JOIN residents r ON hp.resident_id = r.id ORDER BY hp.id DESC");
         $dbNutr = $dbNutrStmt->fetchAll(PDO::FETCH_ASSOC);
         if (!empty($dbNutr)) {
             $formattedNutr = [];
             foreach ($dbNutr as $nu) {
                 $formattedNutr[] = [
                     'id' => 'OPT-' . $nu['id'],
-                    'childName' => $nu['childName'],
-                    'ageMonths' => (int)($nu['ageMonths'] ?: 18),
-                    'barangay' => $nu['barangay'] ?: 'Poblacion',
-                    'height' => ($nu['height'] ?: '75') . ' cm',
-                    'weight' => ($nu['weight'] ?: '9.5') . ' kg',
-                    'status' => 'Normal Weight',
-                    'supplementStatus' => 'Vitamin A Administered'
+                    'name' => $nu['childName'],
+                    'age' => round(((int)$nu['ageMonths']) / 12, 1),
+                    'barangay' => $nu['barangay'],
+                    'height' => $nu['height'],
+                    'weight' => $nu['weight'],
+                    'classification' => 'Assessment pending',
+                    'muac' => null,
+                    'nextVisit' => $nu['last_checkup_date'],
                 ];
             }
             $mockNutritionCases = $formattedNutr;
+        }
+
+        $weeklyRows = $pdo->query(
+            "SELECT DATE(consultation_date) AS visit_date,
+                    COUNT(*) AS consultations,
+                    SUM(CASE WHEN referral_needed = 1 OR referral_to IS NOT NULL THEN 1 ELSE 0 END) AS referred
+             FROM consultations
+             WHERE consultation_date >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
+             GROUP BY DATE(consultation_date)
+             ORDER BY visit_date"
+        )->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        foreach ($weeklyRows as $row) {
+            $weeklyOPDData[] = [
+                'day' => date('D', strtotime($row['visit_date'])),
+                'consultations' => (int)$row['consultations'],
+                'referred' => (int)$row['referred'],
+            ];
+        }
+
+        $diagnosisRows = $pdo->query(
+            "SELECT COALESCE(NULLIF(TRIM(diagnosis), ''), 'Not recorded') AS diagnosis_name, COUNT(*) AS total
+             FROM consultations
+             GROUP BY diagnosis_name
+             ORDER BY total DESC
+             LIMIT 8"
+        )->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        foreach ($diagnosisRows as $row) {
+            $diagnosisData[] = ['name' => $row['diagnosis_name'], 'value' => (int)$row['total']];
+        }
+
+        $monthlyReferralRows = $pdo->query(
+            "SELECT DATE_FORMAT(consultation_date, '%Y-%m') AS month_key,
+                    COUNT(*) AS referrals
+             FROM consultations
+             WHERE (referral_needed = 1 OR referral_to IS NOT NULL)
+               AND consultation_date >= DATE_SUB(CURDATE(), INTERVAL 5 MONTH)
+             GROUP BY month_key
+             ORDER BY month_key"
+        )->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        foreach ($monthlyReferralRows as $row) {
+            $monthlyBloodData[] = [
+                'month' => date('M', strtotime($row['month_key'] . '-01')),
+                'donations' => 0,
+                'transfusions' => 0,
+                'referrals' => (int)$row['referrals'],
+            ];
         }
 
     } catch (Exception $ex) {
@@ -609,28 +849,39 @@ if (!empty($pdo)) {
     }
 }
 
-
-if (!empty($_SESSION['rhu_requests'])) {
-    $mockBloodRequests = array_merge($_SESSION['rhu_requests'], $mockBloodRequests);
+$totalInventory = array_sum(array_map(static fn($item) => (int)($item['units'] ?? 0), $mockRHUInventory));
+$criticalStock = count(array_filter($mockRHUInventory, static fn($item) => ($item['status'] ?? '') === 'critical'));
+$criticalMeds = count(array_filter($mockMedicineInventory, static fn($item) => ($item['status'] ?? '') === 'critical'));
+$lowMeds = count(array_filter($mockMedicineInventory, static fn($item) => ($item['status'] ?? '') === 'low'));
+$pendingRequests = count(array_filter($mockBloodRequests, static fn($request) => in_array($request['status'] ?? '', ['pending', 'matching'], true)));
+$activeDonors = count(array_filter($mockDonors, static fn($donor) => !empty($donor['availability'])));
+$overdueVaccines = count(array_filter($mockImmunizations, static fn($imm) => ($imm['status'] ?? '') === 'overdue'));
+$dueVaccines = count(array_filter($mockImmunizations, static fn($imm) => ($imm['status'] ?? '') === 'due'));
+$activeTB = count(array_filter($mockTBCases, static fn($case) => ($case['outcome'] ?? '') === 'on_treatment'));
+$samCases = count(array_filter($mockNutritionCases, static fn($item) => ($item['classification'] ?? $item['status'] ?? '') === 'SAM'));
+$mamCases = count(array_filter($mockNutritionCases, static fn($item) => ($item['classification'] ?? $item['status'] ?? '') === 'MAM'));
+$dengueCases = array_sum(array_map(static fn($report) => stripos($report['disease'] ?? '', 'dengue') !== false ? (int)($report['cases'] ?? 0) : 0, $mockDiseaseReports));
+$highRiskMom = count(array_filter($mockMaternalCases, static fn($item) => ($item['riskLevel'] ?? '') === 'high'));
+$todayOPD = count(array_filter($mockOPDConsultations, static fn($consultation) => ($consultation['date'] ?? '') === date('Y-m-d')));
+$activeBHW = count(array_filter($mockBHWs, static fn($bhw) => !empty($bhw['activeStatus'])));
+$activeStaff = count(array_filter($mockRHUStaff, static fn($staff) => ($staff['status'] ?? '') === 'active'));
+$todayConsultations = array_values(array_filter($mockOPDConsultations, static fn($consultation) => ($consultation['date'] ?? '') === date('Y-m-d')));
+$weeklyCounts = array_values(array_map(static fn($row) => (int)$row['consultations'], $weeklyOPDData));
+$opdTrendPercent = 0;
+if (count($weeklyCounts) >= 2) {
+    $previousCount = $weeklyCounts[count($weeklyCounts) - 2];
+    $latestCount = $weeklyCounts[count($weeklyCounts) - 1];
+    $opdTrendPercent = $previousCount > 0
+        ? (int)round((($latestCount - $previousCount) / $previousCount) * 100)
+        : 0;
 }
-if (!empty($_SESSION['rhu_drives'])) {
-    $mockBloodDrives = array_merge($_SESSION['rhu_drives'], $mockBloodDrives);
-}
-if (!empty($_SESSION['rhu_referrals'])) {
-    $mockReferrals = array_merge($_SESSION['rhu_referrals'], $mockReferrals);
-}
-if (!empty($_SESSION['rhu_opd'])) {
-    $mockOPDConsultations = array_merge($_SESSION['rhu_opd'], $mockOPDConsultations);
-}
-if (!empty($_SESSION['rhu_patients'])) {
-    $mockPatients = array_merge($_SESSION['rhu_patients'], $mockPatients);
-}
-if (!empty($_SESSION['rhu_transfusions'])) {
-    $mockTransfusions = array_merge($_SESSION['rhu_transfusions'], $mockTransfusions);
-}
-if (!empty($_SESSION['rhu_bhw'])) {
-    $mockBHWs = array_merge($_SESSION['rhu_bhw'], $mockBHWs);
-}
+$filteredDonors = array_filter($mockDonors, static function ($donor) use ($searchQuery) {
+    if ($searchQuery === '') return true;
+    $search = strtolower($searchQuery);
+    return str_contains(strtolower((string)($donor['name'] ?? '')), $search)
+        || str_contains(strtolower((string)($donor['bloodType'] ?? '')), $search)
+        || str_contains(strtolower((string)($donor['barangay'] ?? '')), $search);
+});
 
 $flash = $_SESSION['rhu_flash'] ?? '';
 $error = $_SESSION['rhu_error'] ?? '';
@@ -883,7 +1134,142 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
-    // 8. SAVE BHW ACCOUNT
+    // 8. SAVE FAMILY PLANNING CLIENT
+    if ($action === 'save_fp') {
+        $residentId = (int)($_POST['resident_id'] ?? 0);
+        $method = trim($_POST['method'] ?? '');
+        $acceptorType = trim($_POST['acceptor_type'] ?? '');
+        $lastSupply = trim($_POST['last_supply_date'] ?? '');
+        $nextVisit = trim($_POST['next_visit_date'] ?? '');
+        $status = trim($_POST['status'] ?? 'Active');
+        $notes = trim($_POST['notes'] ?? '');
+
+        if ($residentId <= 0 || $method === '' || $acceptorType === '') {
+            $_SESSION['rhu_error'] = 'Please select a resident, method, and acceptor type.';
+        } elseif (empty($pdo)) {
+            $_SESSION['rhu_error'] = 'Database unavailable. The family planning record was not saved.';
+        } else {
+            try {
+                $stmt = $pdo->prepare(
+                    'INSERT INTO family_planning_clients
+                     (resident_id, method, acceptor_type, last_supply_date, next_visit_date, status, notes)
+                     VALUES (:resident_id, :method, :acceptor_type, :last_supply, :next_visit, :status, :notes)'
+                );
+                $stmt->execute([
+                    'resident_id' => $residentId,
+                    'method' => $method,
+                    'acceptor_type' => $acceptorType,
+                    'last_supply' => $lastSupply ?: null,
+                    'next_visit' => $nextVisit ?: null,
+                    'status' => $status,
+                    'notes' => $notes ?: null,
+                ]);
+                $_SESSION['rhu_flash'] = 'Family planning client saved to the database.';
+            } catch (Exception $exception) {
+                $_SESSION['rhu_error'] = 'Database error: ' . $exception->getMessage();
+            }
+        }
+        header('Location: ' . dashboardUrl('fp'));
+        exit;
+    }
+
+    // 9. SAVE SANITATION INSPECTION
+    if ($action === 'save_inspection') {
+        $establishment = trim($_POST['establishment'] ?? '');
+        $barangay = trim($_POST['barangay'] ?? '');
+        $inspectorId = (int)($_POST['inspector_staff_id'] ?? 0);
+        $inspectionDate = trim($_POST['inspection_date'] ?? date('Y-m-d'));
+        $nextInspection = trim($_POST['next_inspection_date'] ?? '');
+        $status = trim($_POST['status'] ?? 'Compliant');
+        $complianceRate = max(0, min(100, (float)($_POST['compliance_rate'] ?? 0)));
+        $violations = max(0, (int)($_POST['violations'] ?? 0));
+        $findings = trim($_POST['findings'] ?? '');
+
+        if ($establishment === '' || $barangay === '' || $inspectionDate === '') {
+            $_SESSION['rhu_error'] = 'Establishment, barangay, and inspection date are required.';
+        } elseif (empty($pdo)) {
+            $_SESSION['rhu_error'] = 'Database unavailable. The sanitation inspection was not saved.';
+        } else {
+            try {
+                $stmt = $pdo->prepare(
+                    'INSERT INTO sanitation_inspections
+                     (establishment, barangay, inspector_staff_id, inspection_date, next_inspection_date, status, compliance_rate, violations, findings)
+                     VALUES (:establishment, :barangay, :inspector_id, :inspection_date, :next_inspection, :status, :compliance_rate, :violations, :findings)'
+                );
+                $stmt->execute([
+                    'establishment' => $establishment,
+                    'barangay' => $barangay,
+                    'inspector_id' => $inspectorId ?: null,
+                    'inspection_date' => $inspectionDate,
+                    'next_inspection' => $nextInspection ?: null,
+                    'status' => $status,
+                    'compliance_rate' => $complianceRate,
+                    'violations' => $violations,
+                    'findings' => $findings ?: null,
+                ]);
+                $_SESSION['rhu_flash'] = 'Sanitation inspection saved to the database.';
+            } catch (Exception $exception) {
+                $_SESSION['rhu_error'] = 'Database error: ' . $exception->getMessage();
+            }
+        }
+        header('Location: ' . dashboardUrl('sanitation'));
+        exit;
+    }
+
+    // 10. GENERATE A MONTHLY FHSIS SNAPSHOT FROM CURRENT DATABASE RECORDS
+    if ($action === 'save_report') {
+        $month = max(1, min(12, (int)($_POST['report_month'] ?? date('n'))));
+        $year = max(2000, min(2100, (int)($_POST['report_year'] ?? date('Y'))));
+        $status = in_array($_POST['status'] ?? 'Draft', ['Draft', 'Submitted'], true) ? $_POST['status'] : 'Draft';
+        $notes = trim($_POST['notes'] ?? '');
+
+        if (empty($pdo)) {
+            $_SESSION['rhu_error'] = 'Database unavailable. The FHSIS report was not generated.';
+        } else {
+            try {
+                $countForMonth = static function (PDO $connection, string $table, string $dateColumn) use ($month, $year): int {
+                    $statement = $connection->prepare("SELECT COUNT(*) FROM {$table} WHERE YEAR({$dateColumn}) = ? AND MONTH({$dateColumn}) = ?");
+                    $statement->execute([$year, $month]);
+                    return (int)$statement->fetchColumn();
+                };
+                $reportData = [
+                    'residents' => (int)$pdo->query('SELECT COUNT(*) FROM residents')->fetchColumn(),
+                    'consultations' => $countForMonth($pdo, 'consultations', 'consultation_date'),
+                    'vaccinations' => $countForMonth($pdo, 'vaccination_records', 'vaccination_date'),
+                    'disease_cases' => $countForMonth($pdo, 'disease_cases', 'case_date'),
+                    'referrals' => 0,
+                ];
+                $referralStatement = $pdo->prepare(
+                    'SELECT COUNT(*) FROM consultations
+                     WHERE YEAR(consultation_date) = ? AND MONTH(consultation_date) = ?
+                       AND (referral_needed = 1 OR referral_to IS NOT NULL)'
+                );
+                $referralStatement->execute([$year, $month]);
+                $reportData['referrals'] = (int)$referralStatement->fetchColumn();
+                $statement = $pdo->prepare(
+                    "INSERT INTO fhsis_reports (report_month, report_year, submitted_date, report_data, status, notes)
+                     VALUES (?, ?, ?, ?, ?, ?)
+                     ON DUPLICATE KEY UPDATE submitted_date = VALUES(submitted_date), report_data = VALUES(report_data),
+                        status = VALUES(status), notes = VALUES(notes)"
+                );
+                $statement->execute([
+                    $month,
+                    $year,
+                    $status === 'Submitted' ? date('Y-m-d') : null,
+                    json_encode($reportData, JSON_UNESCAPED_UNICODE),
+                    $status,
+                    $notes ?: null,
+                ]);
+                $_SESSION['rhu_flash'] = 'FHSIS report generated from database records.';
+            } catch (Throwable $exception) {
+                $_SESSION['rhu_error'] = 'Database error: ' . $exception->getMessage();
+            }
+        }
+        header('Location: ' . dashboardUrl('reports'));
+        exit;
+    }
+
+    // 10. SAVE BHW ACCOUNT
     if ($action === 'save_bhw') {
         $firstName = trim($_POST['first_name'] ?? '');
         $lastName = trim($_POST['last_name'] ?? '');
@@ -970,25 +1356,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $_SESSION['rhu_error'] = 'Database error creating BHW account: ' . $e->getMessage();
                 }
             } else {
-                $_SESSION['rhu_flash'] = "BHW Account for {$firstName} {$lastName} added successfully!";
+                $_SESSION['rhu_error'] = 'Database unavailable. The BHW account was not saved.';
             }
-
-            // Session backup insertion
-            $newBhwItem = [
-                'id' => 'BHW-' . $insertedId,
-                'name' => $firstName . ' ' . $lastName,
-                'barangay' => $barangay,
-                'contactNo' => $contactNo ?: '0917 111 2222',
-                'activeStatus' => true,
-                'donorsReferred' => 0,
-                'householdsAssigned' => $households,
-                'trainingLevel' => $trainingLevel,
-                'lastTraining' => date('Y-m-d')
-            ];
-            if (!isset($_SESSION['rhu_bhw'])) {
-                $_SESSION['rhu_bhw'] = [];
-            }
-            array_unshift($_SESSION['rhu_bhw'], $newBhwItem);
         }
         header('Location: ' . dashboardUrl('bhw'));
         exit;
@@ -1025,6 +1394,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     </style>
+  <link rel="stylesheet" href="dashboard-enhancements.css">
+  <script defer src="dashboard-enhancements.js?v=20260726-controls3"></script>
 </head>
 
 <body class="bg-gray-50 text-slate-900">
@@ -1053,12 +1424,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <?php echo iconSvg('bell', 'w-5 h-5'); ?>
                             <span class="absolute top-1 right-1 w-2.5 h-2.5 bg-red-400 rounded-full border border-blue-700 animate-pulse"></span>
                         </a>
-                        <a href="RHUAdminDashboard.php" class="hidden sm:flex items-center gap-1.5 text-xs font-semibold bg-white/10 hover:bg-white/20 border border-white/20 px-3 py-1.5 rounded-lg transition-all" title="Admin Panel">
-                            <?php echo iconSvg('shield', 'w-3.5 h-3.5'); ?> Admin Panel
-                        </a>
-                        <span class="inline-flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold"><?php echo iconSvg('bar', 'w-3.5 h-3.5'); ?> <?php echo $showNotifs ? 'Live' : 'Mock'; ?> data</span>
-                        <a href="index.php" class="p-2 hover:bg-blue-600 rounded-lg transition-colors" title="Logout">
-                            <?php echo iconSvg('logout', 'w-5 h-5'); ?>
+                        <?php if (!empty($_SESSION['rhu_admin_authenticated'])): ?>
+                            <a href="RHUAdminDashboard.php" class="hidden sm:flex items-center gap-1.5 text-xs font-semibold bg-white/10 hover:bg-white/20 border border-white/20 px-3 py-1.5 rounded-lg transition-all" title="Admin Panel">
+                                <?php echo iconSvg('shield', 'w-3.5 h-3.5'); ?> Admin Panel
+                            </a>
+                        <?php endif; ?>
+                        <span class="inline-flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold"><?php echo iconSvg('bar', 'w-3.5 h-3.5'); ?> Database data</span>
+                        <a href="StaffLogout.php" data-staff-logout class="staff-logout-trigger" title="Logout">
+                            <?php echo iconSvg('logout', 'w-4 h-4'); ?><span>Log out</span>
                         </a>
                     </div>
                 </div>
@@ -1161,7 +1534,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             </h4>
                             <div class="grid grid-cols-1 gap-1.5">
                                 <?php 
-                                $cat3 = ['medicine', 'bhw', 'staff', 'reports', 'analytics'];
+                                $cat3 = ['medicine', 'bhw', 'staff', 'reports', 'analytics', 'audit'];
                                 foreach ($cat3 as $id):
                                     if (!isset($tabs[$id])) continue;
                                     [$label, $icon] = $tabs[$id];
@@ -1217,8 +1590,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <div class="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
                         <?php echo iconSvg('alert', 'w-5 h-5 text-red-600 flex-shrink-0'); ?>
                         <div class="flex-1">
-                            <p class="text-sm font-bold text-red-800">Active Alerts <?php echo '(' . count(array_filter($notifications, static fn($n) => $n['type'] === 'critical')) . ')'; ?></p>
-                            <p class="text-sm text-red-700">Dengue cluster in Halang/Mabini • <?php echo $criticalMeds + $lowMeds; ?> medicine items need resupply • <?php echo $highRiskMom; ?> high-risk pregnant patients</p>
+                            <p class="text-sm font-bold text-red-800">Active Alerts (<?php echo count(array_filter($notifications, static fn($notification) => !empty($notification['unread']))) + $criticalMeds + $lowMeds + $highRiskMom; ?>)</p>
+                            <p class="text-sm text-red-700"><?php echo $dengueCases; ?> recorded dengue case(s) · <?php echo $criticalMeds + $lowMeds; ?> medicine item(s) need resupply · <?php echo $highRiskMom; ?> high-risk pregnancy record(s)</p>
                         </div>
                         <a href="<?php echo esc(dashboardUrl('reports')); ?>" class="text-xs bg-red-600 text-white px-3 py-1.5 rounded-lg hover:bg-red-700 whitespace-nowrap">View All</a>
                     </div>
@@ -1230,7 +1603,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             ['label' => 'Malnourished', 'value' => $samCases + $mamCases, 'sub' => $samCases . ' SAM / ' . $mamCases . ' MAM', 'color' => 'bg-yellow-500', 'tab' => 'nutrition'],
                             ['label' => 'Dengue Cases', 'value' => $dengueCases, 'sub' => 'This week', 'color' => 'bg-purple-600', 'tab' => 'disease'],
                             ['label' => 'Medicine Alerts', 'value' => $criticalMeds + $lowMeds, 'sub' => $criticalMeds . ' critical', 'color' => 'bg-teal-600', 'tab' => 'medicine'],
-                            ['label' => 'Predictive Alert', 'value' => '+45%', 'sub' => 'Rainy Season Surge', 'color' => 'bg-indigo-600', 'tab' => 'analytics'],
+                            ['label' => 'OPD Trend', 'value' => ($opdTrendPercent > 0 ? '+' : '') . $opdTrendPercent . '%', 'sub' => 'Latest recorded days', 'color' => 'bg-indigo-600', 'tab' => 'analytics'],
                         ];
                         foreach ($kpis as $kpi): ?>
                             <a href="<?php echo esc(dashboardUrl($kpi['tab'])); ?>" class="bg-white rounded-xl p-4 shadow-sm border border-gray-100 hover:shadow-md hover:-translate-y-0.5 transition-all text-left">
@@ -1247,7 +1620,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             ['label' => 'Prenatal Cases', 'value' => count(array_filter($mockMaternalCases, static fn($m) => $m['status'] === 'active_prenatal')), 'sub' => $highRiskMom . ' high-risk', 'tab' => 'maternal', 'color' => 'text-pink-600'],
                             ['label' => 'FP Clients', 'value' => count($mockFPClients), 'sub' => 'Active acceptors', 'tab' => 'fp', 'color' => 'text-rose-600'],
                             ['label' => 'Overdue Vaccines', 'value' => $overdueVaccines + $dueVaccines, 'sub' => 'Need visit', 'tab' => 'immunization', 'color' => 'text-orange-600'],
-                            ['label' => 'Blood Drives', 'value' => count(array_filter($mockBloodDrives, static fn($d) => $d['status'] === 'scheduled')), 'sub' => 'Scheduled', 'tab' => 'drives', 'color' => 'text-green-600'],
+                            ['label' => 'Certificates', 'value' => count($mockHealthCertificates), 'sub' => 'Recorded', 'tab' => 'certificates', 'color' => 'text-green-600'],
                             ['label' => 'Referrals', 'value' => count(array_filter($mockReferrals, static fn($r) => $r['status'] === 'pending')), 'sub' => 'Pending', 'tab' => 'referrals', 'color' => 'text-indigo-600'],
                             ['label' => 'Active BHWs', 'value' => count(array_filter($mockBHWs, static fn($b) => $b['activeStatus'])), 'sub' => 'of ' . count($mockBHWs), 'tab' => 'bhw', 'color' => 'text-teal-600'],
                         ];
@@ -1305,7 +1678,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 <h3 class="font-bold text-gray-900">Today's OPD</h3><a href="<?php echo esc(dashboardUrl('opd')); ?>" class="text-xs text-blue-600 hover:underline">View all</a>
                             </div>
                             <div class="space-y-2">
-                                <?php foreach ($mockOPDConsultations as $c): ?>
+                                <?php foreach ($todayConsultations as $c): ?>
                                     <div class="rounded-xl border border-gray-100 p-3">
                                         <p class="font-bold text-gray-900"><?php echo esc($c['patientName']); ?> <span class="text-gray-500 text-xs"><?php echo esc($c['age']); ?>y • <?php echo esc($c['gender']); ?></span></p>
                                         <p class="text-xs text-gray-500"><?php echo esc($c['diagnosis']); ?></p>
@@ -1317,7 +1690,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <h3 class="font-bold text-gray-900 mb-3">Health Alerts</h3>
                             <div class="space-y-2">
                                 <?php $alerts = [
-                                    ['label' => 'Dengue Cluster (Wk 23)', 'value' => $dengueCases . ' cases', 'color' => 'red', 'tab' => 'disease'],
+                                    ['label' => 'Recorded Dengue Cases', 'value' => $dengueCases . ' cases', 'color' => 'red', 'tab' => 'disease'],
                                     ['label' => 'Overdue Immunization', 'value' => $overdueVaccines . ' children', 'color' => 'orange', 'tab' => 'immunization'],
                                     ['label' => 'High-Risk Prenatal', 'value' => $highRiskMom . ' mothers', 'color' => 'pink', 'tab' => 'maternal'],
                                 ];
@@ -1641,7 +2014,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             ['label' => 'Total Cases', 'value' => count($mockNutritionCases), 'color' => 'yellow'],
                             ['label' => 'SAM', 'value' => $samCases, 'color' => 'red'],
                             ['label' => 'MAM', 'value' => $mamCases, 'color' => 'orange'],
-                            ['label' => 'Average MUAC', 'value' => count($mockNutritionCases) ? round(array_sum(array_map(static fn($item) => $item['muac'], $mockNutritionCases)) / count($mockNutritionCases), 1) . ' cm' : '0 cm', 'color' => 'green'],
+                            ['label' => 'Average MUAC', 'value' => ($muacValues = array_values(array_filter(array_column($mockNutritionCases, 'muac'), 'is_numeric'))) ? round(array_sum($muacValues) / count($muacValues), 1) . ' cm' : 'Not recorded', 'color' => 'green'],
                         ];
                         foreach ($nutriStats as $s): ?>
                             <div class="bg-white rounded-xl p-4 shadow-sm border border-gray-100 text-center">
@@ -1984,6 +2357,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
             <?php endif; ?>
 
+            <?php if ($tab === 'audit'): ?>
+                <div class="space-y-4 sm:space-y-5">
+                    <div>
+                        <h2 class="text-base sm:text-xl font-bold text-gray-900">Staff and Administrator Audit Log</h2>
+                        <p class="mt-1 text-xs text-gray-500">Restricted operational history. Residents cannot access this section.</p>
+                    </div>
+                    <div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+                        <div class="overflow-x-auto">
+                            <table class="w-full min-w-[850px] text-sm">
+                                <thead class="bg-gray-50"><tr><?php foreach (['Date & Time','Actor','Action','Module','Record','IP Address'] as $heading): ?><th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-gray-500"><?php echo esc($heading); ?></th><?php endforeach; ?></tr></thead>
+                                <tbody class="divide-y divide-gray-100">
+                                    <?php if (!$staffAuditLogs): ?><tr><td colspan="6" class="px-4 py-8 text-center text-gray-500">No audit records are available.</td></tr><?php endif; ?>
+                                    <?php foreach ($staffAuditLogs as $log): ?><tr class="hover:bg-gray-50">
+                                        <td class="px-4 py-3 text-gray-600"><?php echo esc($log['created_at']); ?></td>
+                                        <td class="px-4 py-3 font-semibold text-gray-900"><?php echo esc($log['actor']); ?></td>
+                                        <td class="px-4 py-3 text-gray-700"><?php echo esc($log['action']); ?></td>
+                                        <td class="px-4 py-3 text-gray-600"><?php echo esc($log['entity_type'] ?: 'System'); ?></td>
+                                        <td class="px-4 py-3 font-mono text-xs text-gray-500"><?php echo esc($log['entity_id'] ?? '—'); ?></td>
+                                        <td class="px-4 py-3 font-mono text-xs text-gray-500"><?php echo esc($log['ip_address'] ?: 'Not recorded'); ?></td>
+                                    </tr><?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            <?php endif; ?>
+
             <?php if ($tab === 'reports'): ?>
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
@@ -1993,9 +2393,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <?php $reportStats = [
                             ['label' => 'Submitted', 'value' => count($mockDOHReports), 'color' => 'slate'],
-                            ['label' => 'Donations', 'value' => array_sum(array_map(static fn($r) => $r['totalDonations'], $mockDOHReports)), 'color' => 'blue'],
-                            ['label' => 'Units Collected', 'value' => array_sum(array_map(static fn($r) => $r['totalUnitsCollected'], $mockDOHReports)), 'color' => 'green'],
-                            ['label' => 'Transfusions', 'value' => array_sum(array_map(static fn($r) => $r['totalTransfusions'], $mockDOHReports)), 'color' => 'red'],
+                            ['label' => 'Consultations', 'value' => array_sum(array_column($mockDOHReports, 'consultations')), 'color' => 'blue'],
+                            ['label' => 'Vaccinations', 'value' => array_sum(array_column($mockDOHReports, 'vaccinations')), 'color' => 'green'],
+                            ['label' => 'Disease Cases', 'value' => array_sum(array_column($mockDOHReports, 'diseaseCases')), 'color' => 'red'],
                         ];
                         foreach ($reportStats as $s): ?>
                             <div class="bg-white rounded-xl p-4 shadow-sm border border-gray-100 text-center">
@@ -2008,7 +2408,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <div class="overflow-x-auto">
                             <table class="w-full text-sm min-w-[700px]">
                                 <thead class="bg-gray-50">
-                                    <tr><?php foreach (['ID', 'Type', 'Period', 'Generated', 'Donations', 'Units', 'Transfusions', 'Referrals', 'Drives', 'Status'] as $h): ?><th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide"><?php echo esc($h); ?></th><?php endforeach; ?></tr>
+                                    <tr><?php foreach (['ID', 'Type', 'Period', 'Generated', 'Residents', 'Consultations', 'Vaccinations', 'Disease Cases', 'Referrals', 'Status'] as $h): ?><th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide"><?php echo esc($h); ?></th><?php endforeach; ?></tr>
                                 </thead>
                                 <tbody class="divide-y divide-gray-100">
                                     <?php foreach ($mockDOHReports as $rep): ?>
@@ -2017,11 +2417,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                             <td class="px-3 py-2.5 text-gray-900"><?php echo esc($rep['reportType']); ?></td>
                                             <td class="px-4 py-3 text-gray-600"><?php echo esc($rep['period']); ?></td>
                                             <td class="px-4 py-3 text-gray-600"><?php echo esc($rep['generatedDate']); ?></td>
-                                            <td class="px-3 py-2.5 text-gray-600"><?php echo esc($rep['totalDonations']); ?></td>
-                                            <td class="px-4 py-3 text-gray-600"><?php echo esc($rep['totalUnitsCollected']); ?></td>
-                                            <td class="px-4 py-3 text-gray-600"><?php echo esc($rep['totalTransfusions']); ?></td>
+                                            <td class="px-3 py-2.5 text-gray-600"><?php echo esc($rep['residents']); ?></td>
+                                            <td class="px-4 py-3 text-gray-600"><?php echo esc($rep['consultations']); ?></td>
+                                            <td class="px-4 py-3 text-gray-600"><?php echo esc($rep['vaccinations']); ?></td>
+                                            <td class="px-4 py-3 text-gray-600"><?php echo esc($rep['diseaseCases']); ?></td>
                                             <td class="px-3 py-2.5 text-gray-600"><?php echo esc($rep['totalReferrals']); ?></td>
-                                            <td class="px-3 py-2.5 text-gray-600"><?php echo esc($rep['bloodDrivesConducted']); ?></td>
                                             <td class="px-4 py-3"><span class="text-xs px-2 py-0.5 rounded-full font-semibold <?php echo $rep['status'] === 'submitted' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'; ?>"><?php echo esc(ucfirst($rep['status'])); ?></span></td>
                                         </tr>
                                     <?php endforeach; ?>
@@ -2033,6 +2433,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <?php endif; ?>
 
             <?php if ($tab === 'analytics'): ?>
+                <div class="space-y-6">
+                    <div class="border-b border-gray-200 pb-4">
+                        <h2 class="text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('trend', 'w-6 h-6 text-purple-700'); ?> Database Health Analytics</h2>
+                        <p class="mt-1 text-xs text-gray-500">Calculated only from consultations, diagnoses, referrals, disease cases, and medicine transactions stored in MySQL.</p>
+                    </div>
+                    <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                        <div class="rounded-xl border border-blue-100 bg-white p-4"><p class="text-xs font-semibold text-gray-500">Recorded consultations</p><p class="mt-1 text-2xl font-black text-blue-700"><?php echo count($mockOPDConsultations); ?></p></div>
+                        <div class="rounded-xl border border-indigo-100 bg-white p-4"><p class="text-xs font-semibold text-gray-500">Latest OPD trend</p><p class="mt-1 text-2xl font-black text-indigo-700"><?php echo ($opdTrendPercent > 0 ? '+' : '') . $opdTrendPercent; ?>%</p></div>
+                        <div class="rounded-xl border border-red-100 bg-white p-4"><p class="text-xs font-semibold text-gray-500">Recorded disease cases</p><p class="mt-1 text-2xl font-black text-red-700"><?php echo array_sum(array_column($mockDiseaseReports, 'cases')); ?></p></div>
+                        <div class="rounded-xl border border-emerald-100 bg-white p-4"><p class="text-xs font-semibold text-gray-500">Medicine items tracked</p><p class="mt-1 text-2xl font-black text-emerald-700"><?php echo count($mockMedicineInventory); ?></p></div>
+                    </div>
+                    <div class="grid gap-5 lg:grid-cols-2">
+                        <section class="rounded-2xl border border-gray-200 bg-white p-5">
+                            <h3 class="font-bold text-gray-900">OPD activity — last 7 recorded days</h3>
+                            <?php if (!$weeklyOPDData): ?><p class="mt-4 text-sm text-gray-500">No consultation activity is available for the last seven days.</p><?php else: ?>
+                                <div class="mt-4 space-y-3"><?php $weeklyMax = max(array_column($weeklyOPDData, 'consultations')) ?: 1; foreach ($weeklyOPDData as $row): ?><div><div class="mb-1 flex justify-between text-xs"><span class="font-semibold text-gray-600"><?php echo esc($row['day']); ?></span><span><?php echo (int)$row['consultations']; ?> consultation(s), <?php echo (int)$row['referred']; ?> referred</span></div><div class="h-2 rounded-full bg-gray-100"><div class="h-2 rounded-full bg-gradient-to-r from-blue-500 to-teal-500" style="width: <?php echo round(((int)$row['consultations'] / $weeklyMax) * 100); ?>%"></div></div></div><?php endforeach; ?></div>
+                            <?php endif; ?>
+                        </section>
+                        <section class="rounded-2xl border border-gray-200 bg-white p-5">
+                            <h3 class="font-bold text-gray-900">Top recorded diagnoses</h3>
+                            <?php if (!$diagnosisData): ?><p class="mt-4 text-sm text-gray-500">No diagnosis data has been recorded.</p><?php else: ?><div class="mt-4 space-y-2"><?php foreach ($diagnosisData as $diagnosis): ?><div class="flex items-center justify-between rounded-lg bg-gray-50 px-3 py-2 text-sm"><span class="font-medium text-gray-700"><?php echo esc($diagnosis['name']); ?></span><span class="font-bold text-purple-700"><?php echo (int)$diagnosis['value']; ?></span></div><?php endforeach; ?></div><?php endif; ?>
+                        </section>
+                    </div>
+                    <section class="rounded-2xl border border-gray-200 bg-white p-5">
+                        <h3 class="font-bold text-gray-900">Medicine stock status from recorded inventory and transactions</h3>
+                        <?php if (!$mockMedicineInventory): ?><p class="mt-4 text-sm text-gray-500">No medicine inventory records are available.</p><?php else: ?><div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3"><?php foreach ($mockMedicineInventory as $medicine): ?><div class="rounded-xl border border-gray-100 bg-gray-50 p-4"><div class="flex justify-between gap-3"><div><p class="font-bold text-gray-900"><?php echo esc($medicine['genericName']); ?></p><p class="text-xs text-gray-500"><?php echo esc($medicine['form']); ?></p></div><span class="h-fit rounded-full px-2 py-1 text-[10px] font-bold <?php echo $medicine['status'] === 'critical' ? 'bg-red-100 text-red-700' : ($medicine['status'] === 'low' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'); ?>"><?php echo esc(ucfirst($medicine['status'])); ?></span></div><div class="mt-3 flex justify-between text-xs text-gray-600"><span>Stock: <?php echo (int)$medicine['stock']; ?></span><span>30-day issues: <?php echo (int)$medicine['usage30days']; ?></span></div></div><?php endforeach; ?></div><?php endif; ?>
+                    </section>
+                </div>
+                <?php if (false): ?>
                 <div class="space-y-6">
                     <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-4">
                         <div>
@@ -2220,6 +2649,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </div>
                     </div>
                 </div>
+                <?php endif; ?>
             <?php endif; ?>
         </main>
     </div>
@@ -2599,6 +3029,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
     <?php endif; ?>
     <!-- 8. ADD BHW ACCOUNT MODAL -->
+    <?php if ($modal === 'new_fp'): ?>
+        <div class="fixed inset-0 z-[70] flex items-center justify-center bg-gray-900/50 p-4">
+            <div class="w-full max-w-2xl rounded-2xl bg-white shadow-2xl max-h-[92vh] overflow-y-auto">
+                <div class="flex items-center justify-between border-b border-gray-100 p-5"><div><h3 class="font-bold text-gray-900">New Family Planning Client</h3><p class="text-xs text-gray-500">This record will be stored in the RHU database.</p></div><a href="<?php echo esc(dashboardUrl('fp')); ?>" class="rounded-lg p-2 hover:bg-gray-100"><?php echo iconSvg('x', 'w-5 h-5'); ?></a></div>
+                <form method="post" class="grid gap-4 p-5 sm:grid-cols-2">
+                    <input type="hidden" name="action" value="save_fp">
+                    <label class="sm:col-span-2 text-xs font-semibold text-gray-700">Resident<select required name="resident_id" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"><option value="">Select resident</option><?php foreach ($allResidents as $residentOption): ?><option value="<?php echo (int)$residentOption['id']; ?>"><?php echo esc($residentOption['name'] . ' — ' . $residentOption['barangay']); ?></option><?php endforeach; ?></select></label>
+                    <label class="text-xs font-semibold text-gray-700">Method<input required name="method" placeholder="e.g. Pills, DMPA, Implant" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
+                    <label class="text-xs font-semibold text-gray-700">Acceptor type<select required name="acceptor_type" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"><option value="">Select type</option><option>New</option><option>Continuing</option><option>Changing Method</option><option>Restarting</option></select></label>
+                    <label class="text-xs font-semibold text-gray-700">Last supply date<input type="date" name="last_supply_date" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
+                    <label class="text-xs font-semibold text-gray-700">Next visit<input type="date" name="next_visit_date" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
+                    <label class="text-xs font-semibold text-gray-700">Status<select name="status" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"><option>Active</option><option>Inactive</option><option>Completed</option></select></label>
+                    <label class="sm:col-span-2 text-xs font-semibold text-gray-700">Notes<textarea name="notes" rows="3" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></textarea></label>
+                    <div class="sm:col-span-2 flex justify-end gap-2"><a href="<?php echo esc(dashboardUrl('fp')); ?>" class="rounded-xl border border-gray-300 px-4 py-2.5 text-sm font-semibold">Cancel</a><button class="rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700">Save Client</button></div>
+                </form>
+            </div>
+        </div>
+    <?php endif; ?>
+
+    <?php if ($modal === 'new_inspection'): ?>
+        <div class="fixed inset-0 z-[70] flex items-center justify-center bg-gray-900/50 p-4">
+            <div class="w-full max-w-2xl rounded-2xl bg-white shadow-2xl max-h-[92vh] overflow-y-auto">
+                <div class="flex items-center justify-between border-b border-gray-100 p-5"><div><h3 class="font-bold text-gray-900">Add Sanitation Inspection</h3><p class="text-xs text-gray-500">Inspection details will be stored in the RHU database.</p></div><a href="<?php echo esc(dashboardUrl('sanitation')); ?>" class="rounded-lg p-2 hover:bg-gray-100"><?php echo iconSvg('x', 'w-5 h-5'); ?></a></div>
+                <form method="post" class="grid gap-4 p-5 sm:grid-cols-2">
+                    <input type="hidden" name="action" value="save_inspection">
+                    <label class="text-xs font-semibold text-gray-700">Establishment<input required name="establishment" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
+                    <label class="text-xs font-semibold text-gray-700">Barangay<input required name="barangay" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
+                    <label class="text-xs font-semibold text-gray-700">Inspector<select name="inspector_staff_id" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"><option value="">Not assigned</option><?php foreach ($allStaff as $staffOption): ?><option value="<?php echo (int)$staffOption['id']; ?>"><?php echo esc($staffOption['name'] . ' — ' . $staffOption['staff_type']); ?></option><?php endforeach; ?></select></label>
+                    <label class="text-xs font-semibold text-gray-700">Status<select name="status" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"><option>Compliant</option><option>Conditional</option><option>Non-compliant</option><option>For Follow-up</option></select></label>
+                    <label class="text-xs font-semibold text-gray-700">Inspection date<input required type="date" name="inspection_date" value="<?php echo date('Y-m-d'); ?>" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
+                    <label class="text-xs font-semibold text-gray-700">Next inspection<input type="date" name="next_inspection_date" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
+                    <label class="text-xs font-semibold text-gray-700">Compliance rate (%)<input type="number" min="0" max="100" step="0.01" name="compliance_rate" value="0" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
+                    <label class="text-xs font-semibold text-gray-700">Violations<input type="number" min="0" name="violations" value="0" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
+                    <label class="sm:col-span-2 text-xs font-semibold text-gray-700">Findings<textarea name="findings" rows="3" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></textarea></label>
+                    <div class="sm:col-span-2 flex justify-end gap-2"><a href="<?php echo esc(dashboardUrl('sanitation')); ?>" class="rounded-xl border border-gray-300 px-4 py-2.5 text-sm font-semibold">Cancel</a><button class="rounded-xl bg-lime-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-lime-700">Save Inspection</button></div>
+                </form>
+            </div>
+        </div>
+    <?php endif; ?>
+
+    <?php if ($modal === 'new_report'): ?>
+        <div class="fixed inset-0 z-[70] flex items-center justify-center bg-gray-900/50 p-4">
+            <div class="w-full max-w-lg rounded-2xl bg-white shadow-2xl">
+                <div class="flex items-center justify-between border-b border-gray-100 p-5">
+                    <div><h3 class="font-bold text-gray-900">Generate FHSIS Report</h3><p class="text-xs text-gray-500">Counts will be calculated directly from stored RHU records.</p></div>
+                    <a href="<?php echo esc(dashboardUrl('reports')); ?>" class="rounded-lg p-2 hover:bg-gray-100"><?php echo iconSvg('x', 'w-5 h-5'); ?></a>
+                </div>
+                <form method="post" class="grid gap-4 p-5 sm:grid-cols-2">
+                    <input type="hidden" name="action" value="save_report">
+                    <label class="text-xs font-semibold text-gray-700">Month
+                        <select name="report_month" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5">
+                            <?php for ($reportMonth = 1; $reportMonth <= 12; $reportMonth++): ?>
+                                <option value="<?php echo $reportMonth; ?>" <?php echo $reportMonth === (int)date('n') ? 'selected' : ''; ?>><?php echo esc(date('F', mktime(0, 0, 0, $reportMonth, 1))); ?></option>
+                            <?php endfor; ?>
+                        </select>
+                    </label>
+                    <label class="text-xs font-semibold text-gray-700">Year<input required type="number" min="2000" max="2100" name="report_year" value="<?php echo date('Y'); ?>" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
+                    <label class="text-xs font-semibold text-gray-700">Status<select name="status" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"><option>Draft</option><option>Submitted</option></select></label>
+                    <label class="sm:col-span-2 text-xs font-semibold text-gray-700">Notes<textarea name="notes" rows="3" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></textarea></label>
+                    <div class="sm:col-span-2 flex justify-end gap-2"><a href="<?php echo esc(dashboardUrl('reports')); ?>" class="rounded-xl border border-gray-300 px-4 py-2.5 text-sm font-semibold">Cancel</a><button class="rounded-xl bg-slate-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-900">Generate from Database</button></div>
+                </form>
+            </div>
+        </div>
+    <?php endif; ?>
+
     <?php if ($modal === 'new_bhw'): ?>
         <div class="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
             <div class="bg-white rounded-2xl shadow-2xl w-full sm:max-w-lg max-h-[90vh] overflow-y-auto">

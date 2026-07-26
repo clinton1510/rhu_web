@@ -1,5 +1,10 @@
 <?php
 if (session_status() === PHP_SESSION_NONE) session_start();
+if (empty($_SESSION['bhw_user'])) {
+    header('Location: BHWLogin.php');
+    exit;
+}
+require_once __DIR__ . '/db.php';
 
 function esc($value): string { return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8'); }
 function dashboardUrl(string $tab = 'overview', array $extra = []): string {
@@ -34,19 +39,61 @@ $activities = [
 ];
 $bloodTypes = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
 
+// Hydrate the BHW portal exclusively from persistent database records.
+$donors = $drives = $activities = [];
+if (!empty($pdo)) {
+    $requestedBhwId = (int)($_SESSION['bhw_user']['bhw_id'] ?? 0);
+    $profileStatement = $pdo->prepare("SELECT b.id,b.barangay,b.coverage_population,CONCAT(u.first_name,' ',u.last_name) name,s.license_number FROM bhw b LEFT JOIN staff s ON s.id=b.staff_id LEFT JOIN users u ON u.id=s.user_id WHERE (? > 0 AND b.id=?) OR ?=0 ORDER BY b.id LIMIT 1");
+    $profileStatement->execute([$requestedBhwId, $requestedBhwId, $requestedBhwId]);
+    $profile = $profileStatement->fetch(PDO::FETCH_ASSOC) ?: [];
+    $bhwId = (int)($profile['id'] ?? 0);
+    $bhw = [
+        'name' => trim((string)($profile['name'] ?? '')) ?: 'Unassigned BHW Profile',
+        'barangay' => $profile['barangay'] ?? 'Not assigned',
+        'certificationNumber' => $profile['license_number'] ?? ('BHW-' . $bhwId),
+        'assignedHouseholds' => (int)($profile['coverage_population'] ?? 0),
+        'donorsReferred' => 0,
+    ];
+    $settings = $pdo->query("SELECT setting_key,setting_value FROM portal_settings")->fetchAll(PDO::FETCH_KEY_PAIR) ?: [];
+    $rhu = ['name' => $settings['rhu_name'] ?? 'Rural Health Unit', 'mho' => $settings['rhu_mho_name'] ?? 'Not recorded', 'contactNumber' => $settings['rhu_contact'] ?? 'Not recorded'];
+
+    $donorStatement = $pdo->prepare("SELECT * FROM bhw_donor_referrals WHERE (?=0 OR bhw_id=?) ORDER BY id DESC");
+    $donorStatement->execute([$bhwId, $bhwId]);
+    foreach ($donorStatement->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $verified = strtolower($row['status']) === 'verified';
+        $donors[] = ['id'=>'D-'.$row['id'],'name'=>$row['full_name'],'bloodType'=>$row['blood_type'],'age'=>(int)$row['age'],'gender'=>$row['gender'],'contactNumber'=>$row['contact_number'],'donationHistory'=>0,'cluster'=>$row['status'],'availability'=>$verified,'verified'=>$verified,'nextEligibleDate'=>null];
+    }
+    $bhw['donorsReferred'] = count($donors);
+    $driveStatement = $pdo->prepare("SELECT * FROM blood_drives WHERE (?=0 OR bhw_id=?) ORDER BY scheduled_date DESC");
+    $driveStatement->execute([$bhwId, $bhwId]);
+    foreach ($driveStatement->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $drives[] = ['id'=>'BD-'.$row['id'],'title'=>$row['title'],'scheduledDate'=>$row['scheduled_date'],'startTime'=>$row['start_time'] ?: 'Not recorded','endTime'=>$row['end_time'] ?: 'Not recorded','venue'=>$row['venue'],'targetDonors'=>(int)$row['target_donors'],'actualDonors'=>$row['actual_donors'] === null ? null : (int)$row['actual_donors'],'status'=>strtolower($row['status']),'notes'=>$row['notes'],'bloodTypesNeeded'=>array_values(array_filter(array_map('trim',explode(',',(string)$row['blood_types_needed']))))];
+    }
+    foreach (array_slice($donors, 0, 5) as $donor) $activities[] = ['text'=>'Submitted donor '.$donor['name'].' to RHU registry','time'=>'Stored in database','color'=>'bg-green-500'];
+    $reportStatement = $pdo->prepare("SELECT * FROM blood_need_reports WHERE (?=0 OR bhw_id=?) ORDER BY id DESC LIMIT 5");
+    $reportStatement->execute([$bhwId, $bhwId]);
+    foreach ($reportStatement->fetchAll(PDO::FETCH_ASSOC) as $row) $activities[] = ['text'=>'Reported '.$row['blood_type'].' blood need for '.$row['patient_name'],'time'=>$row['created_at'],'color'=>'bg-red-500'];
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $form = $_POST['form'] ?? '';
     if ($form === 'donor') {
         $newDonor = ['id' => 'D-NEW-' . time(), 'name' => trim($_POST['name'] ?? ''), 'bloodType' => $_POST['bloodType'] ?? '', 'age' => (int) ($_POST['age'] ?? 0), 'gender' => $_POST['gender'] ?? 'Male', 'contactNumber' => trim($_POST['contactNumber'] ?? ''), 'donationHistory' => 0, 'cluster' => 'New', 'availability' => false, 'verified' => false, 'nextEligibleDate' => null];
         if ($newDonor['name'] !== '' && $newDonor['age'] >= 17 && $newDonor['contactNumber'] !== '') {
-            $_SESSION['bhw_referred_donors'][] = $newDonor;
-            $_SESSION['bhw_flash'] = 'Donor referred to RHU successfully. They will be contacted for screening.';
+            if (!empty($pdo)) {
+                $statement = $pdo->prepare("INSERT INTO bhw_donor_referrals (bhw_id,full_name,blood_type,age,gender,contact_number,address) VALUES (?,?,?,?,?,?,?)");
+                $statement->execute([$bhwId ?: null,$newDonor['name'],$newDonor['bloodType'],$newDonor['age'],$newDonor['gender'],$newDonor['contactNumber'],trim($_POST['address'] ?? '') ?: null]);
+                $_SESSION['bhw_flash'] = 'Donor referral saved to the RHU database.';
+            }
         }
         header('Location: ' . dashboardUrl('donors')); exit;
     }
     if ($form === 'report') {
-        $_SESSION['bhw_blood_need_reports'][] = ['patientName' => trim($_POST['patientName'] ?? ''), 'bloodType' => $_POST['bloodType'] ?? '', 'urgency' => $_POST['urgency'] ?? 'urgent', 'description' => trim($_POST['description'] ?? ''), 'submittedAt' => date('c')];
-        $_SESSION['bhw_flash'] = 'Blood need reported to RHU. Staff will respond shortly.';
+        if (!empty($pdo)) {
+            $statement = $pdo->prepare("INSERT INTO blood_need_reports (bhw_id,patient_name,blood_type,urgency,description) VALUES (?,?,?,?,?)");
+            $statement->execute([$bhwId ?: null,trim($_POST['patientName'] ?? ''),$_POST['bloodType'] ?? '',$_POST['urgency'] ?? 'urgent',trim($_POST['description'] ?? '')]);
+            $_SESSION['bhw_flash'] = 'Blood need report saved to the RHU database.';
+        }
         header('Location: ' . dashboardUrl('report')); exit;
     }
 }
@@ -61,6 +108,8 @@ function formatDate(string $date): string { return date('F j, Y', strtotime($dat
   <title>BHW Dashboard - ResiHUnity RHU</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>body{font-family:ui-sans-serif,system-ui,sans-serif}.safe-area-pb{padding-bottom:env(safe-area-inset-bottom)}@media(max-width:639px){.desktop-tabs{display:none}}@media(min-width:640px){.mobile-tabs{display:none}}</style>
+  <link rel="stylesheet" href="dashboard-enhancements.css">
+  <script defer src="dashboard-enhancements.js?v=20260726-controls3"></script>
 </head>
 <body class="bg-gray-50 text-gray-900">
 <div class="min-h-screen">
@@ -68,7 +117,7 @@ function formatDate(string $date): string { return date('F j, Y', strtotime($dat
     <div class="max-w-full px-4 py-3">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3"><div class="flex h-9 w-9 items-center justify-center rounded-xl bg-white/20 text-lg">♥</div><div><div class="flex items-center gap-2"><h1 class="text-base font-bold">ResiHUnity RHU</h1><span class="hidden rounded-full bg-green-600 px-2 py-0.5 text-xs text-green-100 sm:block">BHW Portal</span></div><p class="text-xs text-green-200">Barangay <?= esc($bhw['barangay']) ?> — <?= esc($bhw['name']) ?></p></div></div>
-        <div class="flex items-center gap-2"><button type="button" class="relative rounded-lg p-2 hover:bg-green-600" aria-label="Notifications">♧<span class="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-400"></span></button><a href="LandingPage.php" class="rounded-lg p-2 hover:bg-green-600" aria-label="Log out">↪</a></div>
+        <div class="flex items-center gap-2"><button type="button" class="relative rounded-lg p-2 hover:bg-green-600" aria-label="Notifications">♧<span class="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-400"></span></button><a href="StaffLogout.php?portal=bhw" data-staff-logout class="staff-logout-trigger" aria-label="Log out"><span class="staff-logout-glyph" aria-hidden="true"></span><span>Log out</span></a></div>
       </div>
       <nav class="desktop-tabs mt-2 gap-1 overflow-x-auto pb-0.5 sm:flex">
         <?php foreach ($tabs as $id => [$label, $icon]): ?><a href="<?= esc(dashboardUrl($id)) ?>" class="flex items-center gap-1.5 rounded-lg px-4 py-1.5 text-xs font-semibold whitespace-nowrap transition <?= $tab === $id ? 'bg-white text-green-700 shadow-sm' : 'text-green-100 hover:bg-green-600' ?>"><span><?= $icon ?></span><?= esc($label) ?></a><?php endforeach; ?>

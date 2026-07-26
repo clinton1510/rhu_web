@@ -13,7 +13,9 @@ $roles = [
     'Public Health Nurse' => ['NURSE', 'NurseDashboard.php'],
     'Medical Technologist' => ['MEDTECH', 'MedTechDashboard.php'],
     'Sanitary Inspector' => ['SANITARY_INSPECTOR', 'SanitaryDashboard.php'],
-    'Administrative Staff' => ['ADMIN_STAFF', 'AdminStaffDashboard.php']
+    'Rural Health Physician' => ['PHYSICIAN', 'RHUDashboard.php'],
+    'Municipal Health Officer' => ['RHU_ADMIN', 'RHUDashboard.php'],
+    'Administrative Staff' => ['ADMIN_STAFF', 'RHUDashboard.php']
 ];
 
 $error = '';
@@ -29,13 +31,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         try {
             [$staffType, $route] = $roles[$role];
-            $statement = $pdo->prepare('SELECT u.id AS user_id, u.email, u.password_hash, u.first_name, u.last_name, s.id AS staff_id, s.staff_type FROM users u INNER JOIN staff s ON s.user_id = u.id WHERE u.email = :email AND u.is_active = 1 AND s.is_active = 1 AND s.staff_type = :staff_type LIMIT 1');
-            $statement->execute(['email' => $email, 'staff_type' => $staffType]);
+            $statement = $pdo->prepare(
+                'SELECT u.id AS user_id, u.email, u.password_hash, u.first_name, u.last_name,
+                        s.id AS staff_id, s.staff_type
+                 FROM users u
+                 INNER JOIN staff s ON s.user_id = u.id
+                 LEFT JOIN roles r ON r.id = u.role_id
+                 WHERE u.email = :email
+                   AND u.is_active = 1
+                   AND s.is_active = 1
+                   AND (UPPER(s.staff_type) = UPPER(:staff_type_staff) OR UPPER(r.name) = UPPER(:staff_type_role))
+                 LIMIT 1'
+            );
+            $statement->execute([
+                'email' => $email,
+                'staff_type_staff' => $staffType,
+                'staff_type_role' => $staffType,
+            ]);
             $staff = $statement->fetch();
 
             if (!$staff || !password_verify($password, $staff['password_hash'])) {
                 $error = 'Invalid staff credentials or selected role.';
             } else {
+                // A staff login must never inherit a previous admin/resident/BHW identity.
+                unset($_SESSION['rhu_admin_authenticated'], $_SESSION['user'], $_SESSION['bhw_user']);
+                session_regenerate_id(true);
                 $_SESSION['rhu_staff_login'] = [
                     'id' => (int)$staff['user_id'],
                     'staff_id' => (int)$staff['staff_id'],

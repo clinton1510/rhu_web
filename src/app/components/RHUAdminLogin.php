@@ -40,11 +40,6 @@ $step = $_GET['step'] ?? 'credentials';
 $error = '';
 $infoMsg = '';
 
-// DEBUG: Temporary output
-if (empty($_POST)) {
-  error_log('RHUAdminLogin DEBUG: pdo=' . ($pdo ? 'connected' : 'null') . ', activeAdmin=' . ($activeAdmin ? 'found' : 'null'));
-}
-
 if (!empty($_SESSION['admin_login_flash'])) {
   $infoMsg = $_SESSION['admin_login_flash'];
   unset($_SESSION['admin_login_flash']);
@@ -133,6 +128,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       } else {
         $loginSettings = portalSettings($pdo);
         if (portalSetting($loginSettings, 'two_factor_enabled', '1') !== '1') {
+          unset($_SESSION['rhu_staff_login'], $_SESSION['bhw_user']);
           session_regenerate_id(true);
           $_SESSION['rhu_admin_authenticated'] = true;
           $_SESSION['user'] = $activeAdmin;
@@ -177,6 +173,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       $step = 'mfa';
     } else {
       $user = $_SESSION['pending_admin_user'] ?? null;
+      unset($_SESSION['rhu_staff_login'], $_SESSION['bhw_user']);
       session_regenerate_id(true);
       $_SESSION['rhu_admin_authenticated'] = true;
       if ($user) {

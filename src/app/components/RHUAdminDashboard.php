@@ -309,7 +309,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
         $flashSuccess = 'Mail and 2FA settings saved.';
     }
 
-    if ($action === 'create_event') {
+    if ($action === 'create_scheduled_event') {
         $title = trim($_POST['title'] ?? '');
         $scheduledDate = trim($_POST['scheduled_date'] ?? '');
         if ($title !== '' && $scheduledDate !== '') {
@@ -886,6 +886,12 @@ $tabLabelMap = [
     'staff' => 'Staff Accounts',
     'residents' => 'Resident Registry',
     'announcements' => 'Landing Page Content',
+    'consultations' => 'OPD Consultations',
+    'maternal' => 'Maternal Health',
+    'vaccination' => 'Immunization',
+    'disease' => 'Disease Surveillance',
+    'medicine' => 'Medicine Inventory',
+    'vital' => 'Vital Statistics',
     'reports' => 'Reports & Analytics',
     'audit' => 'Audit Logs',
     'system' => 'System Settings',
@@ -898,6 +904,12 @@ $tabIconMap = [
     'staff' => 'stethoscope',
     'residents' => 'check',
     'announcements' => 'bell',
+    'consultations' => 'activity',
+    'maternal' => 'baby',
+    'vaccination' => 'shield',
+    'disease' => 'alert',
+    'medicine' => 'pill',
+    'vital' => 'file',
     'reports' => 'bar',
     'audit' => 'database',
     'system' => 'settings',
@@ -905,7 +917,7 @@ $tabIconMap = [
 ];
 
 $drawerGroups = [
-    'Dashboard' => ['overview'],
+    'Dashboard' => ['overview', 'announcements'],
     'People & Accounts' => ['users', 'staff', 'residents'],
     'Clinical Services' => ['consultations', 'maternal', 'vaccination', 'disease'],
     'Records & Resources' => ['medicine', 'vital'],
@@ -1071,6 +1083,8 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
             [data-scroll-reveal] { opacity: 1; transform: none; }
         }
     </style>
+  <link rel="stylesheet" href="dashboard-enhancements.css">
+  <script defer src="dashboard-enhancements.js?v=20260726-controls3"></script>
 </head>
 
 <body class="min-h-screen bg-gray-50 text-gray-900">
@@ -1136,8 +1150,8 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                                 <p class="text-[10px] text-purple-200 leading-none mt-0.5"><?php echo esc($currentAdminCode); ?></p>
                             </div>
                         </div>
-                        <a href="RHUAdminDashboard.php?logout=1" class="p-2 rounded-lg hover:bg-white/10" aria-label="Sign out">
-                            <?php echo iconSvg('logout', 'w-4 h-4'); ?>
+                        <a href="RHUAdminDashboard.php?logout=1" data-staff-logout class="staff-logout-trigger" aria-label="Sign out">
+                            <?php echo iconSvg('logout', 'w-4 h-4'); ?><span>Log out</span>
                         </a>
                     </div>
                 </div>
@@ -1173,7 +1187,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
             </nav>
             <div class="border-t border-gray-100 p-3">
                 <a href="RHUDashboard.php" class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50"><span class="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100"><?php echo iconSvg('stethoscope', 'w-4 h-4'); ?></span>Clinical Dashboard</a>
-                <a href="RHUAdminDashboard.php?logout=1" class="mt-1 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50"><span class="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100"><?php echo iconSvg('logout', 'w-4 h-4'); ?></span>Sign Out</a>
+                <a href="RHUAdminDashboard.php?logout=1" data-staff-logout class="mt-1 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50"><span class="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100"><?php echo iconSvg('logout', 'w-4 h-4'); ?></span>Sign Out</a>
             </div>
         </aside>
 
@@ -2053,7 +2067,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                     <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
                         <h3 class="mb-3 font-bold text-gray-900">Publish RHU Event</h3>
                         <form method="post" class="grid gap-2 text-xs sm:grid-cols-3">
-                            <input type="hidden" name="action" value="create_event">
+                            <input type="hidden" name="action" value="create_scheduled_event">
                             <input required name="title" placeholder="Event title" class="rounded border p-2">
                             <input required type="date" name="scheduled_date" class="rounded border p-2">
                             <input type="time" name="start_time" class="rounded border p-2">

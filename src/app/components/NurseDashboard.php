@@ -1,5 +1,9 @@
 <?php
 if (session_status() === PHP_SESSION_NONE) session_start();
+if (empty($_SESSION['rhu_staff_login']) || strtoupper((string)($_SESSION['rhu_staff_login']['staff_type'] ?? '')) !== 'NURSE') {
+    header('Location: RHULogin.php');
+    exit;
+}
 require_once __DIR__ . '/db.php';
 
 function esc(mixed $v): string {
@@ -215,6 +219,8 @@ $todayOPDCount = count($opdConsultations);
             padding-bottom: env(safe-area-inset-bottom)
         }
     </style>
+  <link rel="stylesheet" href="dashboard-enhancements.css">
+  <script defer src="dashboard-enhancements.js?v=20260726-controls3"></script>
 </head>
 
 <body class="min-h-screen bg-gray-50 text-slate-900">
@@ -240,7 +246,7 @@ $todayOPDCount = count($opdConsultations);
                     <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/20 border border-emerald-300/40 text-xs font-bold text-emerald-100">
                         <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> MySQL Database Connected
                     </span>
-                    <a href="LandingPage.php" class="p-2 rounded-lg hover:bg-white/10 text-xs font-bold" title="Log Out">↪</a>
+                    <a href="StaffLogout.php" data-staff-logout class="staff-logout-trigger" title="Log Out"><span class="staff-logout-glyph" aria-hidden="true"></span><span>Log out</span></a>
                 </div>
             </div>
 

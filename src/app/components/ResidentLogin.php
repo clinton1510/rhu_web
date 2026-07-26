@@ -29,6 +29,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $rstmt = $pdo->prepare('SELECT id FROM residents WHERE email = :email LIMIT 1');
                             $rstmt->execute(['email' => $email]);
                             $resId = $rstmt->fetchColumn();
+                            if (!$resId && !empty($user['last_name'])) {
+                                $rstmt = $pdo->prepare('SELECT id, first_name FROM residents WHERE last_name = :last_name ORDER BY id');
+                                $rstmt->execute(['last_name' => trim((string)$user['last_name'])]);
+                                $accountFirstName = strtolower(trim((string)($user['first_name'] ?? '')));
+                                $matches = array_values(array_filter(
+                                    $rstmt->fetchAll(PDO::FETCH_ASSOC),
+                                    static function (array $candidate) use ($accountFirstName): bool {
+                                        $residentFirstName = strtolower(trim((string)($candidate['first_name'] ?? '')));
+                                        return $residentFirstName !== ''
+                                            && ($accountFirstName === $residentFirstName
+                                                || str_starts_with($accountFirstName, $residentFirstName . ' ')
+                                                || str_starts_with($residentFirstName, $accountFirstName . ' '));
+                                    }
+                                ));
+                                if (count($matches) === 1) $resId = (int)$matches[0]['id'];
+                            }
                             if ($resId) $_SESSION['user']['resident_id'] = (int)$resId;
                         } catch (Exception $e) {}
                         header('Location: ResidentDashboard.php');

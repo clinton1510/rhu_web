@@ -33,6 +33,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login_bhw'])) {
             $bhw = $statement->fetch();
             if (!$bhw || !password_verify($password, $bhw['password_hash'])) $error = 'Invalid BHW credentials, assigned barangay, or certification number.';
             if ($bhw && !$error) {
+                // Keep BHW authorization isolated from prior admin, resident, or RHU staff sessions.
+                unset($_SESSION['rhu_admin_authenticated'], $_SESSION['user'], $_SESSION['rhu_staff_login']);
+                session_regenerate_id(true);
                 $_SESSION['bhw_user'] = ['id' => (int)$bhw['user_id'], 'staff_id' => (int)$bhw['staff_id'], 'bhw_id' => (int)$bhw['bhw_id'], 'email' => $bhw['email'], 'barangay' => $bhw['barangay'], 'name' => trim($bhw['first_name'] . ' ' . $bhw['last_name'])];
                 portalAudit($pdo, (int)$bhw['user_id'], 'BHW login', 'staff', (int)$bhw['staff_id']);
                 header('Location: BHWDashboard.php');

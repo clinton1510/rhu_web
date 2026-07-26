@@ -15,6 +15,14 @@ if (empty($_SESSION['user'])) {
     exit;
 }
 
+// Audit records are restricted to authenticated RHU staff and administrators.
+// Never allow a resident-controlled tab value to enter an audit-log view.
+if (strtolower((string)($_GET['tab'] ?? '')) === 'audit') {
+    $_SESSION['resident_dashboard_access_flash'] = 'Audit logs are restricted to RHU staff and administrators.';
+    header('Location: ResidentDashboard.php?tab=home');
+    exit;
+}
+
 function esc($value): string { return htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
 function residentAge(?string $dateOfBirth): ?int {
     if (!$dateOfBirth) return null;
@@ -32,9 +40,15 @@ $certificateSuccess = $_SESSION['resident_dashboard_certificate_flash'] ?? '';
 unset($_SESSION['resident_dashboard_message_flash'], $_SESSION['resident_dashboard_certificate_flash']);
 $contactErrors = [];
 $certificateErrors = [];
-
 $residentMessages = [];
-$portalEvents = [];
+$dependents = [];
+$dependentErrors = [];
+$dependentSuccess = $_SESSION['resident_dashboard_dependent_flash'] ?? '';
+unset($_SESSION['resident_dashboard_dependent_flash']);
+if (empty($_SESSION['resident_dashboard_csrf'])) {
+    $_SESSION['resident_dashboard_csrf'] = bin2hex(random_bytes(32));
+}
+$dashboardCsrf = $_SESSION['resident_dashboard_csrf'];
 
 if (!empty($pdo)) {
     try {
@@ -48,18 +62,112 @@ if (!empty($pdo)) {
             $statement->execute(['email' => $user['email']]);
             $resident = $statement->fetch();
         }
-        if (!$resident && !empty($user['id'])) {
-            $statement = $pdo->prepare('SELECT * FROM residents WHERE user_id = :uid LIMIT 1');
-            $statement->execute(['uid' => $user['id']]);
-            $resident = $statement->fetch();
+        if (!$resident && !empty($user['last_name'])) {
+            $statement = $pdo->prepare('SELECT * FROM residents WHERE last_name = :last_name ORDER BY id');
+            $statement->execute(['last_name' => trim((string)$user['last_name'])]);
+            $sameSurnameResidents = $statement->fetchAll(PDO::FETCH_ASSOC);
+            $accountFirstName = strtolower(trim((string)($user['first_name'] ?? '')));
+            $matchingResidents = array_values(array_filter(
+                $sameSurnameResidents,
+                static function (array $candidate) use ($accountFirstName): bool {
+                    $residentFirstName = strtolower(trim((string)($candidate['first_name'] ?? '')));
+                    return $residentFirstName !== ''
+                        && ($accountFirstName === $residentFirstName
+                            || str_starts_with($accountFirstName, $residentFirstName . ' ')
+                            || str_starts_with($residentFirstName, $accountFirstName . ' '));
+                }
+            ));
+            if (count($matchingResidents) === 1) {
+                $resident = $matchingResidents[0];
+                $_SESSION['user']['resident_id'] = (int)$resident['id'];
+                $user['resident_id'] = (int)$resident['id'];
+            }
         }
-
         if ($resident) {
             $residentId = (int)$resident['id'];
+            $pdo->exec(
+                "CREATE TABLE IF NOT EXISTS resident_dependents (
+                    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    primary_resident_id BIGINT UNSIGNED NOT NULL,
+                    first_name VARCHAR(100) NOT NULL,
+                    middle_name VARCHAR(100) NULL,
+                    last_name VARCHAR(100) NOT NULL,
+                    relationship VARCHAR(40) NOT NULL,
+                    date_of_birth DATE NOT NULL,
+                    gender VARCHAR(20) NULL,
+                    blood_type VARCHAR(10) NULL,
+                    medical_notes TEXT NULL,
+                    is_active TINYINT(1) NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_resident_dependents_primary (primary_resident_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+            );
 
             if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $formType = $_POST['form'] ?? '';
-                if ($formType === 'contact') {
+                $submittedCsrf = (string)($_POST['csrf_token'] ?? '');
+                if (in_array($formType, ['add_dependent', 'remove_dependent'], true)
+                    && !hash_equals($dashboardCsrf, $submittedCsrf)) {
+                    $dependentErrors[] = 'Your session expired. Please refresh the page and try again.';
+                } elseif ($formType === 'add_dependent') {
+                    $firstName = trim($_POST['first_name'] ?? '');
+                    $middleName = trim($_POST['middle_name'] ?? '');
+                    $lastName = trim($_POST['last_name'] ?? '');
+                    $relationship = trim($_POST['relationship'] ?? '');
+                    $dateOfBirth = trim($_POST['date_of_birth'] ?? '');
+                    $gender = trim($_POST['gender'] ?? '');
+                    $bloodType = trim($_POST['blood_type'] ?? '');
+                    $medicalNotes = trim($_POST['medical_notes'] ?? '');
+                    $allowedRelationships = ['Child', 'Spouse', 'Parent', 'Sibling', 'Grandchild', 'Other'];
+                    $allowedGenders = ['Female', 'Male', 'Other', 'Prefer not to say'];
+                    $allowedBloodTypes = ['', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', 'Unknown'];
+
+                    if ($firstName === '' || $lastName === '' || $relationship === '' || $dateOfBirth === '') {
+                        $dependentErrors[] = 'First name, last name, relationship, and date of birth are required.';
+                    } elseif (!in_array($relationship, $allowedRelationships, true)) {
+                        $dependentErrors[] = 'Please select a valid relationship.';
+                    } elseif ($gender !== '' && !in_array($gender, $allowedGenders, true)) {
+                        $dependentErrors[] = 'Please select a valid gender.';
+                    } elseif (!in_array($bloodType, $allowedBloodTypes, true)) {
+                        $dependentErrors[] = 'Please select a valid blood type.';
+                    } elseif (!DateTime::createFromFormat('Y-m-d', $dateOfBirth) || $dateOfBirth > date('Y-m-d')) {
+                        $dependentErrors[] = 'Please provide a valid date of birth.';
+                    } else {
+                        $statement = $pdo->prepare(
+                            'INSERT INTO resident_dependents
+                             (primary_resident_id, first_name, middle_name, last_name, relationship, date_of_birth, gender, blood_type, medical_notes)
+                             VALUES (:resident_id, :first_name, :middle_name, :last_name, :relationship, :date_of_birth, :gender, :blood_type, :medical_notes)'
+                        );
+                        $statement->execute([
+                            'resident_id' => $residentId,
+                            'first_name' => $firstName,
+                            'middle_name' => $middleName ?: null,
+                            'last_name' => $lastName,
+                            'relationship' => $relationship,
+                            'date_of_birth' => $dateOfBirth,
+                            'gender' => $gender ?: null,
+                            'blood_type' => $bloodType ?: null,
+                            'medical_notes' => $medicalNotes ?: null,
+                        ]);
+                        $_SESSION['resident_dashboard_dependent_flash'] = "{$firstName} {$lastName} was added to your household.";
+                        header('Location: ResidentDashboard.php?tab=family');
+                        exit;
+                    }
+                } elseif ($formType === 'remove_dependent') {
+                    $dependentId = (int)($_POST['dependent_id'] ?? 0);
+                    if ($dependentId > 0) {
+                        $statement = $pdo->prepare(
+                            'DELETE FROM resident_dependents WHERE id = :id AND primary_resident_id = :resident_id'
+                        );
+                        $statement->execute(['id' => $dependentId, 'resident_id' => $residentId]);
+                        $_SESSION['resident_dashboard_dependent_flash'] = $statement->rowCount()
+                            ? 'The dependent was removed from your household.'
+                            : 'Dependent record not found.';
+                        header('Location: ResidentDashboard.php?tab=family');
+                        exit;
+                    }
+                } elseif ($formType === 'contact') {
                     $subject = trim($_POST['subject'] ?? 'General Inquiry');
                     $message = trim($_POST['message'] ?? '');
                     if ($message === '') {
@@ -97,34 +205,20 @@ if (!empty($pdo)) {
                     $_SESSION['resident_dashboard_message_flash'] = 'OPD Consultation Appointment request submitted to RHU Staff & Attending Physician.';
                     header('Location: ResidentDashboard.php?tab=records');
                     exit;
-                } elseif ($formType === 'emergency_request') {
+                }
+                // Handling Emergency Referral Request
+                elseif ($formType === 'emergency_request') {
                     $nature = trim($_POST['emergency_nature'] ?? 'Medical Emergency');
                     $location = trim($_POST['pickup_location'] ?? ($resident['address'] ?? 'Barangay Area'));
-                        
+
                     $ins = $pdo->prepare("INSERT INTO messages (resident_id, subject, message, status, created_at) VALUES (:res, 'URGENT: Emergency Referral', :msg, 'Urgent', NOW())");
                     $ins->execute([
-                            'res' => $residentId, 
-                            'msg' => "EMERGENCY REFERRAL REQUEST - Type: {$nature} | Location: {$location}"
-                        ]);
-                        
-                        $_SESSION['resident_dashboard_message_flash'] = 'EMERGENCY REQUEST SENT! The RHU Disaster & Response Unit has been alerted.';
-                        header('Location: ResidentDashboard.php?tab=emergency');
-                        exit;
-                    }
-                } elseif ($formType === 'event_registration') {
-                    $eventId = (int)($_POST['event_id'] ?? 0);
-                    $eventCheck = $pdo->prepare("SELECT id FROM portal_events WHERE id = :id AND status = 'Scheduled' AND scheduled_date >= CURDATE()");
-                    $eventCheck->execute(['id' => $eventId]);
-                    if ($eventCheck->fetchColumn()) {
-                        $ins = $pdo->prepare(
-                            "INSERT INTO event_registrations (event_id, resident_id, status)
-                             VALUES (:event_id, :resident_id, 'Pending')
-                             ON DUPLICATE KEY UPDATE status = VALUES(status)"
-                        );
-                        $ins->execute(['event_id' => $eventId, 'resident_id' => $residentId]);
-                        $_SESSION['resident_dashboard_message_flash'] = 'Your event registration was submitted for RHU confirmation.';
-                    }
-                    header('Location: ResidentDashboard.php?tab=events');
+                        'res' => $residentId,
+                        'msg' => "EMERGENCY REFERRAL REQUEST - Type: {$nature} | Location: {$location}"
+                    ]);
+
+                    $_SESSION['resident_dashboard_message_flash'] = 'EMERGENCY REQUEST SENT! The RHU Disaster & Response Unit has been alerted.';
+                    header('Location: ResidentDashboard.php?tab=emergency');
                     exit;
                 }
             }
@@ -168,18 +262,20 @@ if (!empty($pdo)) {
             $residentMessages = $statement->fetchAll(PDO::FETCH_ASSOC);
 
             $statement = $pdo->prepare(
-                "SELECT pe.*, er.status AS registration_status
-                 FROM portal_events pe
-                 LEFT JOIN event_registrations er ON er.event_id = pe.id AND er.resident_id = :resident_id
-                 WHERE pe.status = 'Scheduled' AND pe.scheduled_date >= CURDATE()
-                 ORDER BY pe.scheduled_date, pe.start_time"
+                'SELECT * FROM resident_dependents
+                 WHERE primary_resident_id = :resident_id AND is_active = 1
+                 ORDER BY date_of_birth ASC, last_name, first_name'
             );
             $statement->execute(['resident_id' => $residentId]);
-            $portalEvents = $statement->fetchAll(PDO::FETCH_ASSOC);
+            $dependents = $statement->fetchAll(PDO::FETCH_ASSOC);
         }
     } catch (Exception $ex) {
         error_log("ResidentDashboard DB Hydration Error: " . $ex->getMessage());
     }
+}
+
+if (!$resident && $_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['form'] ?? '') === 'add_dependent') {
+    $dependentErrors[] = 'Your account is not linked to a resident record, so the dependent was not saved. Please contact RHU staff to verify your resident profile.';
 }
 
 if (!$resident && !empty($_SESSION['resident_registration'])) $resident = $_SESSION['resident_registration'];
@@ -217,12 +313,64 @@ $events = [
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Resident Dashboard - ResiHUnity RHU</title>
+  <title>Resident Dashboard - RedPulse RHU</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-    body { font-family: 'Plus Jakarta Sans', sans-serif; }
+    :root {
+      --rhu-teal: #0f766e;
+      --rhu-aqua: #14b8a6;
+      --rhu-sky: #0284c7;
+      --rhu-ink: #0f172a;
+    }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background:
+        radial-gradient(circle at 4% 3%, rgba(20,184,166,.13), transparent 25rem),
+        radial-gradient(circle at 96% 12%, rgba(14,165,233,.10), transparent 28rem),
+        linear-gradient(155deg, #f8fffe 0%, #f8fafc 48%, #f5f9ff 100%);
+      color: var(--rhu-ink);
+    }
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0 0 auto;
+      z-index: 60;
+      height: 3px;
+      background: linear-gradient(90deg, #10b981, #14b8a6, #0ea5e9, #6366f1);
+      pointer-events: none;
+    }
+    #scroll-progress {
+      position: fixed;
+      inset: 0 auto auto 0;
+      z-index: 70;
+      width: 0;
+      height: 3px;
+      background: linear-gradient(90deg, #34d399, #22d3ee, #60a5fa);
+      box-shadow: 0 0 12px rgba(34,211,238,.65);
+      transition: width 80ms linear;
+    }
+    #sidebar-overlay {
+      background: rgba(15, 23, 42, .34);
+      backdrop-filter: blur(5px);
+      -webkit-backdrop-filter: blur(5px);
+      transition: opacity 220ms ease, backdrop-filter 220ms ease;
+    }
+    .ambient-orb {
+      position: fixed;
+      z-index: -1;
+      width: 20rem;
+      height: 20rem;
+      border-radius: 9999px;
+      filter: blur(80px);
+      opacity: .18;
+      pointer-events: none;
+      animation: orb-float 12s ease-in-out infinite alternate;
+    }
+    .ambient-orb-one { left: 10%; top: 18%; background: #2dd4bf; }
+    .ambient-orb-two { right: 3%; bottom: 4%; background: #60a5fa; animation-delay: -5s; }
 
     /* Collapsed Sidebar Style */
     .sidebar-collapsed {
@@ -247,15 +395,158 @@ $events = [
     .nav-active i {
       color: #1a73e8 !important;
     }
+    [data-tab-panel] {
+      animation: panel-enter 300ms cubic-bezier(.2,.8,.2,1);
+    }
+    [data-tab-panel] > .rounded-2xl,
+    [data-tab-panel] article,
+    [data-tab-panel] .dashboard-surface {
+      transition: transform 220ms cubic-bezier(.2,.8,.2,1), box-shadow 220ms ease, border-color 220ms ease;
+    }
+    [data-tab-panel] > .rounded-2xl:hover,
+    [data-tab-panel] article:hover,
+    [data-tab-panel] .dashboard-surface:hover {
+      transform: translateY(-3px) scale(1.012);
+      border-color: rgba(45,212,191,.75);
+      box-shadow: 0 16px 35px rgba(15,118,110,.11);
+      position: relative;
+      z-index: 2;
+    }
+    button, a {
+      -webkit-tap-highlight-color: transparent;
+    }
+    button:not([disabled]), a[href] {
+      transition: transform 180ms ease, box-shadow 180ms ease, background-color 180ms ease, color 180ms ease, border-color 180ms ease;
+    }
+    button:not([disabled]):active, a[href]:active {
+      transform: scale(.97);
+    }
+    input, select, textarea {
+      transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--rhu-aqua) !important;
+      box-shadow: 0 0 0 4px rgba(20,184,166,.12) !important;
+    }
+    .reveal-on-scroll {
+      opacity: 0;
+      transform: translateY(18px);
+    }
+    .reveal-on-scroll.is-visible {
+      opacity: 1;
+      transform: none;
+      transition: opacity 500ms ease, transform 500ms cubic-bezier(.2,.8,.2,1);
+    }
+    #sidebar {
+      background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(240,253,250,.96) 55%, rgba(239,246,255,.96));
+      border-color: rgba(153,246,228,.7);
+      box-shadow: 12px 0 35px rgba(15,23,42,.06);
+    }
+    #sidebar .sidebar-link:hover {
+      transform: translateX(3px);
+      background: linear-gradient(90deg, rgba(204,251,241,.8), rgba(224,242,254,.58));
+      color: var(--rhu-teal);
+    }
+    header.sticky {
+      background: rgba(255,255,255,.84) !important;
+      border-color: rgba(153,246,228,.65) !important;
+      box-shadow: 0 8px 30px rgba(15,118,110,.055);
+      backdrop-filter: blur(18px);
+    }
+    [data-tab-panel] h3,
+    [data-tab-panel] h4 {
+      letter-spacing: -.015em;
+    }
+    [data-tab-panel] .bg-white {
+      background-image: linear-gradient(145deg, rgba(255,255,255,.98), rgba(248,250,252,.94));
+    }
+    [data-notification-panel] {
+      animation: popover-enter 190ms cubic-bezier(.2,.8,.2,1);
+      border-color: rgba(153,246,228,.8) !important;
+      box-shadow: 0 20px 45px rgba(15,23,42,.16) !important;
+    }
+    #dependent-modal > div,
+    #appointment-modal > div,
+    #logout-modal > div {
+      animation: modal-enter 240ms cubic-bezier(.2,.8,.2,1);
+    }
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: #99f6e4 transparent;
+    }
+    @keyframes panel-enter {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: none; }
+    }
+    @keyframes modal-enter {
+      from { opacity: 0; transform: translateY(12px) scale(.97); }
+      to { opacity: 1; transform: none; }
+    }
+    @keyframes popover-enter {
+      from { opacity: 0; transform: translateY(-6px) scale(.98); }
+      to { opacity: 1; transform: none; }
+    }
+    @keyframes orb-float {
+      from { transform: translate3d(-1rem,-1rem,0) scale(.92); }
+      to { transform: translate3d(2rem,2rem,0) scale(1.08); }
+    }
+    .family-hover {
+      transform: translateZ(0) scale(1);
+      transition: transform 220ms cubic-bezier(.2,.8,.2,1), box-shadow 220ms ease, border-color 220ms ease;
+      will-change: transform;
+    }
+    .family-hover:hover {
+      transform: translateY(-3px) scale(1.025);
+      box-shadow: 0 16px 32px rgba(15, 118, 110, .14);
+      z-index: 2;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      [data-tab-panel],
+      #dependent-modal > div,
+      #appointment-modal > div,
+      #logout-modal > div,
+      .reveal-on-scroll,
+      .reveal-on-scroll.is-visible {
+        animation: none;
+        transition: none;
+        transform: none;
+        opacity: 1;
+      }
+      .family-hover,
+      .family-hover:hover {
+        transform: none;
+        transition: none;
+      }
+      .ambient-orb { animation: none; }
+    }
   </style>
+  <link rel="stylesheet" href="dashboard-enhancements.css">
+  <script defer src="dashboard-enhancements.js"></script>
 </head>
-<body class="min-h-screen bg-gray-50">
-  <header class="sticky top-0 z-40 bg-gradient-to-r from-emerald-700 to-teal-700 text-white shadow-xl">
-    <div class="px-4 py-3 sm:px-6"><div class="flex flex-wrap items-center justify-between gap-2">
-      <div class="flex items-center gap-3"><div class="flex h-9 w-9 items-center justify-center rounded-xl bg-white/20 text-red-300">♥</div><div><h1 class="text-base font-bold">ResiHUnity RHU</h1><p class="text-xs text-emerald-200">Resident Health Portal</p></div></div>
-      <div class="flex items-center gap-2">
-        <div class="relative"><button type="button" data-notifications class="relative rounded-lg p-2 hover:bg-white/10" aria-label="Notifications">♢<span class="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-400"></span></button>
-          <div data-notification-panel class="hidden absolute right-0 top-10 z-50 w-72 overflow-hidden rounded-xl border border-gray-100 bg-white text-gray-800 shadow-2xl"><div class="flex items-center justify-between border-b p-3"><p class="text-sm font-bold">Notifications</p><button type="button" data-close-notifications class="text-xs font-medium text-gray-500">Close</button></div><div class="border-b bg-emerald-50/60 p-3 text-xs"><p>Your hypertension follow-up is due on July 10, 2026.</p><p class="mt-1 text-gray-400">2 days ago</p></div><div class="border-b bg-emerald-50/60 p-3 text-xs"><p>Annual influenza vaccine due October 2026. Schedule now.</p><p class="mt-1 text-gray-400">1 week ago</p></div><div class="p-3 text-xs"><p>Medical certificate HC-2026-041 is ready for download.</p><p class="mt-1 text-gray-400">Jun 10</p></div></div>
+<body class="min-h-screen bg-white text-slate-800 antialiased flex flex-col md:flex-row">
+  <div id="scroll-progress" aria-hidden="true"></div>
+  <div class="ambient-orb ambient-orb-one" aria-hidden="true"></div>
+  <div class="ambient-orb ambient-orb-two" aria-hidden="true"></div>
+
+  <!-- Mobile Overlay -->
+  <div id="sidebar-overlay" class="fixed inset-0 z-40 hidden md:hidden" aria-hidden="true"></div>
+
+  <!-- Google Classroom White Sidebar -->
+  <aside id="sidebar" class="fixed md:sticky top-0 z-50 h-screen w-64 shrink-0 bg-white border-r border-slate-200 transition-all duration-200 ease-in-out flex flex-col justify-between -translate-x-full md:translate-x-0">
+    <div>
+      <!-- Header / Toggle -->
+      <div class="flex items-center justify-between h-16 px-4 border-b border-slate-100">
+        <div class="flex items-center gap-3 overflow-hidden">
+          <button id="sidebar-collapse-btn" type="button" class="flex h-10 w-10 items-center justify-center rounded-full text-slate-600 hover:bg-slate-100 transition-colors" title="Toggle Menu">
+            <i data-lucide="menu" class="h-5 w-5"></i>
+          </button>
+          <div class="sidebar-header-text flex items-center gap-2">
+            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-600 text-white font-bold">
+              <i data-lucide="activity" class="h-4 w-4"></i>
+            </div>
+            <span class="text-base font-bold text-slate-800 tracking-tight">RedPulse</span>
+          </div>
         </div>
       </div>
 
@@ -272,7 +563,7 @@ $events = [
 
     <!-- Sign Out -->
     <div class="p-2 border-t border-slate-100">
-      <a href="ResidentDashboard.php?logout=1" class="sidebar-link w-full flex items-center gap-4 px-4 py-3 rounded-r-full text-sm font-semibold text-rose-600 hover:bg-rose-50 transition-all">
+      <a href="ResidentDashboard.php?logout=1" data-logout-link class="sidebar-link w-full flex items-center gap-4 px-4 py-3 rounded-r-full text-sm font-semibold text-rose-600 hover:bg-rose-50 transition-all">
         <i data-lucide="log-out" class="h-5 w-5 shrink-0"></i>
         <span class="sidebar-text truncate">Sign Out</span>
       </a>
@@ -408,10 +699,8 @@ $events = [
               ['Health Records', 'records', 'bg-sky-50 text-sky-600', 'stethoscope'],
               ['Immunization', 'immunization', 'bg-indigo-50 text-indigo-600', 'shield-check'],
               ['Certificates', 'certificates', 'bg-emerald-50 text-emerald-600', 'award'],
-              ['Family Members', 'family', 'bg-rose-50 text-rose-600', 'users'],
               ['Health Events', 'events', 'bg-rose-50 text-rose-600', 'calendar'],
               ['Contact RHU', 'contact', 'bg-teal-50 text-teal-600', 'phone-call'],
-              ['Emergency & Referral', 'emergency', 'bg-rose-50 text-rose-600', 'siren'],
               ['Health Tips', 'home', 'bg-purple-50 text-purple-600', 'heart-pulse']
             ];
             foreach ($quickAccess as [$label, $target, $style, $icon]): ?>
@@ -508,67 +797,6 @@ $events = [
             <div class="rounded-2xl border border-slate-200 bg-white p-8 text-center text-slate-400">
               <i data-lucide="syringe" class="mx-auto mb-2 h-10 w-10 text-slate-300"></i>
               <p class="text-sm font-semibold">No vaccination records found</p>
-            <button type="submit" class="w-full py-2.5 bg-blue-600 text-white font-bold rounded-lg text-sm hover:bg-blue-700 shadow-md">Submit Appointment Request to RHU Doctor</button>
-        </form>
-    </div>
-    </section>
-
-    <section data-tab-panel="immunization" class="hidden space-y-4 sm:space-y-5"><h2 class="text-base font-bold text-gray-900 sm:text-xl">⌁ Immunization Record</h2><div class="flex gap-3 rounded-xl border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-700">✓<p>Your immunization records are verified by <strong>Nasugbu Rural Health Unit I</strong>. Present this screen or download your card at the RHU office.</p></div><div class="space-y-3"><?php if (!$vaccinationRecords): ?><div class="rounded-xl border border-gray-100 bg-white p-5 text-center text-gray-500 shadow-sm">No vaccination records found. Your immunization history will appear here once available.</div><?php else: foreach ($vaccinationRecords as $record): $upToDate = !empty($record['next_dose_date']); ?><article class="flex items-center gap-4 rounded-xl border border-gray-100 bg-white p-4 shadow-sm"><span class="flex h-10 w-10 items-center justify-center rounded-xl <?= $upToDate ? 'bg-indigo-100 text-indigo-600' : 'bg-green-100 text-green-600' ?>">♜</span><div class="min-w-0 flex-1"><p class="text-sm font-bold text-gray-900"><?= esc($record['vaccine_name']) ?></p><p class="mt-0.5 text-xs text-gray-500">Last given: <?= esc($record['vaccination_date'] ?? '—') ?></p><?php if ($upToDate): ?><p class="mt-0.5 text-xs text-emerald-700">Next due: <strong><?= esc($record['next_dose_date']) ?></strong></p><?php endif; ?><?php if (!empty($record['provider_name'])): ?><p class="mt-0.5 text-xs text-gray-500">Provided by: <?= esc($record['provider_name']) ?></p><?php endif; ?></div><span class="rounded-full px-2 py-1 text-xs font-bold <?= $upToDate ? 'bg-indigo-100 text-indigo-700' : 'bg-green-100 text-green-700' ?>"><?= $upToDate ? 'Up to date' : 'Complete' ?></span></article><?php endforeach; endif; ?></div><div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5"><h3 class="mb-3 font-bold text-gray-900">ⓘ Recommended for Adults 36+</h3><div class="space-y-2 text-sm text-gray-600"><?php foreach (['Annual Influenza Vaccine','Pneumococcal vaccine every 5 years','Td booster every 10 years','Hepatitis B (if not previously vaccinated)','COVID-19 booster (per DOH schedule)'] as $recommendation): ?><p>› <?= esc($recommendation) ?></p><?php endforeach; ?></div></div><a href="ResidentDashboard.php?tab=immunization&download_immunization=1" class="inline-flex w-full items-center justify-center rounded-xl bg-indigo-600 py-3 font-semibold text-white hover:bg-indigo-700">⇩ Download Immunization Card</a></section>
-
-    <section data-tab-panel="certificates" class="hidden space-y-4 sm:space-y-5"><div class="flex flex-wrap items-center justify-between gap-2"><h2 class="text-base font-bold text-gray-900 sm:text-xl">▧ My Certificates</h2><button type="button" data-scroll-to="certificate-request" class="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700">+ Request New</button></div><?php if ($certificateSuccess): ?><div class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700"><?= esc($certificateSuccess) ?></div><?php endif; ?><?php if ($certificateErrors): ?><div class="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"><?php foreach ($certificateErrors as $error): ?><p><?= esc($error) ?></p><?php endforeach; ?></div><?php endif; ?><?php if (!$certificates): ?><div class="rounded-xl border border-gray-100 bg-white p-5 text-center text-gray-500 shadow-sm">No certificate records are available yet for this account.</div><?php else: ?><div class="space-y-3"><?php foreach ($certificates as $certificate): ?><div class="flex items-center justify-between rounded-xl border border-gray-100 bg-white p-4 shadow-sm"><div><p class="font-bold text-gray-900"><?= esc($certificate['certificate_type_name'] ?? 'Health Certificate') ?></p><p class="text-xs text-gray-500">Issued <?= esc($certificate['issue_date']) ?> · <?= esc($certificate['certificate_number'] ?? 'Pending number') ?></p></div><span class="rounded-full bg-green-100 px-2 py-1 text-xs font-bold text-green-700"><?= esc($certificate['validity_status'] ?? 'Issued') ?></span></div><?php endforeach; ?></div><?php endif; ?><div id="certificate-request" class="rounded-xl border border-gray-200 bg-gray-50 p-4"><p class="mb-2 text-sm font-bold text-gray-700">Request a Certificate</p><form method="post" action="ResidentDashboard.php?tab=certificates" class="grid grid-cols-2 gap-2 text-xs" id="certificate-request-form"><input type="hidden" name="form" value="certificate_request"><?php foreach (['Medical Certificate (₱50)','Health Certificate (₱100)','Barangay Health Cert (₱100)','Certificate of Live Birth (FREE)'] as $certificateType): ?><button type="submit" name="certificate_type" value="<?= esc($certificateType) ?>" class="rounded-lg border border-gray-200 bg-white p-2.5 text-left font-semibold text-gray-700 hover:border-green-400 hover:bg-green-50"><?= esc($certificateType) ?></button><?php endforeach; ?></form></div></section>
-
-    <section data-tab-panel="events" class="hidden space-y-4 sm:space-y-5">
-      <h2 class="text-base font-bold text-gray-900 sm:text-xl">RHU Events &amp; Health Programs</h2>
-      <div class="flex gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700"><p>All events are <strong>FREE</strong> for registered residents of Nasugbu. Bring a valid ID and your PhilHealth card.</p></div>
-      <div class="space-y-3">
-        <?php if (!$portalEvents): ?><p class="rounded-xl bg-white p-5 text-center text-sm text-gray-500">No upcoming events are currently scheduled.</p><?php endif; ?>
-        <?php foreach ($portalEvents as $event): ?>
-          <article class="flex items-start gap-4 rounded-xl border border-indigo-200 bg-indigo-50 p-4">
-            <span class="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-indigo-500"></span>
-            <div class="flex-1">
-              <div class="flex flex-wrap items-center gap-2"><span class="rounded border border-gray-200 bg-white px-2 py-0.5 font-mono text-xs text-gray-500"><?= esc($event['event_date']) ?></span><span class="text-sm font-bold text-gray-900"><?= esc($event['title']) ?></span></div>
-              <p class="mt-1 text-xs text-gray-600"><?= esc($event['description'] ?? '') ?> · <?= esc($event['venue']) ?></p>
-            </div>
-            <?php if (!empty($event['registration_status'])): ?>
-              <span class="rounded-full bg-white px-3 py-1 text-xs font-bold text-indigo-700"><?= esc($event['registration_status']) ?></span>
-            <?php else: ?>
-              <form method="post" action="ResidentDashboard.php?tab=events">
-                <input type="hidden" name="form" value="event_registration">
-                <input type="hidden" name="event_id" value="<?= (int)$event['id'] ?>">
-                <button class="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white">Register</button>
-              </form>
-            <?php endif; ?>
-          </article>
-        <?php endforeach; ?>
-      </div>
-    </section>
-
-    <section data-tab-panel="contact" class="hidden space-y-4 sm:space-y-5"><h2 class="text-base font-bold text-gray-900 sm:text-xl">☎ Contact the RHU</h2><div class="space-y-3 rounded-xl border border-gray-100 bg-white p-5 shadow-sm sm:space-y-4"><h3 class="font-bold text-gray-900">Nasugbu Rural Health Unit I</h3><?php foreach ([['⌖','Address','Poblacion, Nasugbu, Batangas'],['☎','Contact','(043) 416-1234'],['◷','Hours','Mon–Fri: 8:00 AM – 5:00 PM'],['♙','Municipal Health Officer','Dr. Chedric Bascoguin']] as [$icon, $label, $value]): ?><div class="flex gap-3"><span class="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-50 text-teal-600"><?= esc($icon) ?></span><div><p class="text-xs font-semibold uppercase tracking-wide text-gray-500"><?= esc($label) ?></p><p class="mt-0.5 text-sm font-medium text-gray-800"><?= esc($value) ?></p></div></div><?php endforeach; ?></div><div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm"><h3 class="mb-3 font-bold text-gray-900">Send a Message to RHU Staff</h3><?php if ($contactSuccess): ?><div class="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700"><?= esc($contactSuccess) ?></div><?php endif; ?><?php if ($contactErrors): ?><div class="mb-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"><?php foreach ($contactErrors as $error): ?><p><?= esc($error) ?></p><?php endforeach; ?></div><?php endif; ?><form method="post" action="ResidentDashboard.php?tab=contact" class="space-y-3"><input type="hidden" name="form" value="contact"><label class="block text-xs font-semibold uppercase tracking-wide text-gray-500">Message Type</label><select name="subject" class="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm"><option value="General Inquiry">General Inquiry</option><option value="Appointment Request">Appointment Request</option><option value="Certificate Request">Certificate Request</option><option value="Health Concern">Health Concern</option><option value="Feedback / Complaint">Feedback / Complaint</option></select><label class="block text-xs font-semibold uppercase tracking-wide text-gray-500">Message</label><textarea name="message" rows="4" class="w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm" placeholder="Type your message here..."></textarea><button type="submit" class="w-full rounded-lg bg-teal-600 py-2.5 text-sm font-semibold text-white hover:bg-teal-700 shadow-md">Send Message to RHU Staff</button></form></div>
-
-    <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm space-y-3">
-        <h3 class="font-bold text-gray-900 text-sm">Your Sent Messages & Staff Replies</h3>
-        <?php if (empty($residentMessages)): ?>
-            <p class="text-xs text-gray-500">No messages sent yet. Messages you send above will be dispatched directly to RHU Staff and Admin dashboards.</p>
-        <?php else: ?>
-            <div class="space-y-3">
-                <?php foreach ($residentMessages as $msg): ?>
-                    <div class="p-3.5 rounded-xl border border-gray-100 bg-gray-50 space-y-1.5">
-                        <div class="flex justify-between items-center text-xs">
-                            <span class="font-bold text-gray-900"><?php echo esc($msg['subject']); ?></span>
-                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold <?php echo $msg['status'] === 'Replied' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-amber-100 text-amber-700 border border-amber-200'; ?>">
-                                <?php echo esc($msg['status']); ?>
-                            </span>
-                        </div>
-                        <p class="text-xs text-gray-700 leading-relaxed"><?php echo esc($msg['message']); ?></p>
-                        <p class="text-[10px] text-gray-400"><?php echo esc(date('M d, Y h:i A', strtotime($msg['created_at']))); ?></p>
-                        <?php if (!empty($msg['admin_reply'])): ?>
-                            <div class="mt-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-900 space-y-1">
-                                <p class="font-bold flex items-center gap-1 text-blue-800">💬 RHU Staff Official Response:</p>
-                                <p class="text-blue-950 font-medium"><?php echo esc($msg['admin_reply']); ?></p>
-                            </div>
-                        <?php endif; ?>
-                    </div>
-                <?php endforeach; ?>
             </div>
           <?php else: foreach ($vaccinationRecords as $record): ?>
             <article class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs">
@@ -680,7 +908,7 @@ $events = [
               <button type="submit" class="w-full rounded-xl bg-teal-600 py-3 text-xs font-bold text-white hover:bg-teal-700 transition-all">Send Message to Staff</button>
             </form>
           </div>
-         
+
           <!-- History Messages -->
           <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-2xs space-y-4">
             <h4 class="text-xs font-bold uppercase tracking-wider text-slate-400">Previous Messages</h4>
@@ -701,139 +929,245 @@ $events = [
           </div>
         </div>
       </section>
-     
+
       <!-- 5. FAMILY MEMBERS TAB -->
-        <section data-tab-panel="family" class="hidden space-y-6">
+      <section data-tab-panel="family" class="hidden space-y-6">
         <div class="flex items-center justify-between">
-            <div>
+          <div>
             <h3 class="text-lg font-bold text-slate-900">Family & Household Health Profile</h3>
             <p class="text-xs text-slate-500 font-medium">Manage and view health records for dependents linked to your household</p>
-            </div>
-            <button type="button" class="rounded-xl bg-teal-600 px-4 py-2 text-xs font-bold text-white hover:bg-teal-700 transition-all flex items-center gap-2">
+          </div>
+          <button type="button" data-dependent-open class="family-hover rounded-xl bg-gradient-to-r from-teal-600 to-sky-600 px-4 py-2.5 text-xs font-bold text-white shadow-lg shadow-teal-600/20 hover:from-teal-700 hover:to-sky-700 flex items-center gap-2">
             <i data-lucide="user-plus" class="h-4 w-4"></i> Add Dependent
-            </button>
+          </button>
+        </div>
+
+        <?php if ($dependentSuccess): ?>
+          <div class="flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-xs font-semibold text-emerald-800">
+            <i data-lucide="circle-check" class="h-5 w-5 shrink-0"></i><p><?= esc($dependentSuccess) ?></p>
+          </div>
+        <?php endif; ?>
+        <?php if ($dependentErrors): ?>
+          <div class="flex items-start gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-xs font-semibold text-rose-800">
+            <i data-lucide="circle-alert" class="h-5 w-5 shrink-0"></i>
+            <div><?php foreach ($dependentErrors as $error): ?><p><?= esc($error) ?></p><?php endforeach; ?></div>
+          </div>
+        <?php endif; ?>
+
+        <div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div class="family-hover rounded-2xl border border-teal-100 bg-gradient-to-br from-teal-50 to-emerald-50 p-4"><p class="text-[10px] font-bold uppercase tracking-wider text-teal-700">Household members</p><p class="mt-1 text-2xl font-black text-teal-900"><?= count($dependents) + 1 ?></p></div>
+          <div class="family-hover rounded-2xl border border-sky-100 bg-gradient-to-br from-sky-50 to-indigo-50 p-4"><p class="text-[10px] font-bold uppercase tracking-wider text-sky-700">Dependents</p><p class="mt-1 text-2xl font-black text-sky-900"><?= count($dependents) ?></p></div>
+          <div class="family-hover col-span-2 rounded-2xl border border-violet-100 bg-gradient-to-br from-violet-50 to-fuchsia-50 p-4 sm:col-span-1"><p class="text-[10px] font-bold uppercase tracking-wider text-violet-700">Profile status</p><p class="mt-2 text-xs font-extrabold text-violet-900">Verified resident</p></div>
         </div>
 
         <!-- Household Head Card -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <!-- Self (Head) -->
-            <div class="rounded-2xl border-2 border-teal-500 bg-teal-50/30 p-5 shadow-2xs relative">
+          <!-- Self (Head) -->
+          <div class="family-hover rounded-2xl border-2 border-teal-500 bg-teal-50/30 p-5 shadow-2xs relative">
             <span class="absolute top-4 right-4 rounded-full bg-teal-100 text-teal-800 text-[10px] font-bold px-2 py-0.5">Head of Family</span>
             <div class="flex items-center gap-3">
-                <div class="flex h-12 w-12 items-center justify-center rounded-full bg-teal-600 text-white font-bold text-sm">
+              <div class="flex h-12 w-12 items-center justify-center rounded-full bg-teal-600 text-white font-bold text-sm">
                 <?= esc($initials) ?>
-                </div>
-                <div>
+              </div>
+              <div>
                 <h4 class="font-bold text-slate-900 text-sm"><?= esc(($resident['first_name'] ?? '') . ' ' . ($resident['last_name'] ?? '')) ?></h4>
                 <p class="text-xs text-slate-500 font-medium">Age: <?= $age ?? '—' ?> | <?= esc($resident['gender'] ?? 'N/A') ?></p>
-                </div>
+              </div>
             </div>
             <div class="mt-4 pt-3 border-t border-slate-200/60 flex justify-between text-xs font-semibold text-teal-700">
-                <span>Active Profile</span>
-                <span class="flex items-center gap-1"><i data-lucide="check-circle" class="h-3.5 w-3.5"></i> Viewing</span>
+              <span>Active Profile</span>
+              <span class="flex items-center gap-1"><i data-lucide="check-circle" class="h-3.5 w-3.5"></i> Viewing</span>
             </div>
-            </div>
+          </div>
 
-            <!-- Sample Dependent 1 -->
-            <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs hover:border-slate-300 transition-all">
-            <div class="flex items-center gap-3">
-                <div class="flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100 text-indigo-600 font-bold text-sm">
-                JR
+          <?php foreach ($dependents as $dependent):
+            $dependentName = trim(($dependent['first_name'] ?? '') . ' ' . ($dependent['middle_name'] ?? '') . ' ' . ($dependent['last_name'] ?? ''));
+            $dependentInitials = strtoupper(substr($dependent['first_name'] ?? 'D', 0, 1) . substr($dependent['last_name'] ?? 'P', 0, 1));
+            $dependentAge = residentAge($dependent['date_of_birth'] ?? null);
+          ?>
+            <article class="family-hover group rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-sky-50/40 p-5 shadow-sm hover:border-sky-300">
+              <div class="flex items-start gap-3">
+                <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-sky-500 to-indigo-600 text-sm font-bold text-white shadow-md"><?= esc($dependentInitials) ?></div>
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0"><h4 class="truncate text-sm font-bold text-slate-900"><?= esc($dependentName) ?></h4><p class="mt-1 text-xs font-medium text-slate-500"><?= esc($dependent['relationship']) ?> · <?= $dependentAge === null ? 'Age unavailable' : esc($dependentAge) . ' y/o' ?> · <?= esc($dependent['gender'] ?: 'Not specified') ?></p></div>
+                    <span class="rounded-full bg-sky-100 px-2 py-1 text-[9px] font-bold uppercase tracking-wide text-sky-700"><?= esc($dependent['blood_type'] ?: 'Blood N/A') ?></span>
+                  </div>
                 </div>
-                <div>
+              </div>
+              <?php if (!empty($dependent['medical_notes'])): ?><p class="mt-4 rounded-xl bg-amber-50 p-3 text-[11px] font-medium leading-5 text-amber-800"><i data-lucide="notebook-tabs" class="mr-1 inline h-3.5 w-3.5"></i><?= esc($dependent['medical_notes']) ?></p><?php endif; ?>
+              <div class="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
+                <span class="flex items-center gap-1 text-[10px] font-bold text-emerald-700"><i data-lucide="link" class="h-3.5 w-3.5"></i>Linked dependent</span>
+                <form method="post" action="ResidentDashboard.php?tab=family" onsubmit="return confirm('Remove this dependent from your household?')">
+                  <input type="hidden" name="form" value="remove_dependent"><input type="hidden" name="csrf_token" value="<?= esc($dashboardCsrf) ?>"><input type="hidden" name="dependent_id" value="<?= (int)$dependent['id'] ?>">
+                  <button type="submit" class="rounded-lg px-2 py-1 text-[10px] font-bold text-rose-600 hover:bg-rose-50">Remove</button>
+                </form>
+              </div>
+            </article>
+          <?php endforeach; ?>
+
+          <?php if (!$dependents): ?>
+            <button type="button" data-dependent-open class="family-hover flex min-h-44 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-sky-200 bg-sky-50/40 p-5 text-center hover:border-sky-400 hover:bg-sky-50">
+              <span class="flex h-12 w-12 items-center justify-center rounded-full bg-white text-sky-600 shadow-sm"><i data-lucide="user-plus" class="h-5 w-5"></i></span><strong class="mt-3 text-sm text-slate-800">Add your first dependent</strong><span class="mt-1 text-xs text-slate-500">Create a linked household profile</span>
+            </button>
+          <?php endif; ?>
+
+          <?php if (false): ?>
+          <!-- Sample Dependent 1 -->
+          <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs hover:border-slate-300 transition-all">
+            <div class="flex items-center gap-3">
+              <div class="flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100 text-indigo-600 font-bold text-sm">
+                JR
+              </div>
+              <div>
                 <h4 class="font-bold text-slate-900 text-sm">Juan Dela Cruz Jr.</h4>
                 <p class="text-xs text-slate-500 font-medium">Child • 4 y/o • Male</p>
-                </div>
+              </div>
             </div>
             <div class="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center text-xs font-medium text-slate-600">
-                <span class="text-emerald-600 font-bold">Vaccine Complete (OPT+)</span>
-                <button type="button" data-tab-link="immunization" class="text-teal-600 font-bold hover:underline">View Records</button>
+              <span class="text-emerald-600 font-bold">Vaccine Complete (OPT+)</span>
+              <button type="button" data-tab-link="immunization" class="text-teal-600 font-bold hover:underline">View Records</button>
             </div>
-            </div>
+          </div>
 
-            <!-- Sample Dependent 2 -->
-            <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs hover:border-slate-300 transition-all">
+          <!-- Sample Dependent 2 -->
+          <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs hover:border-slate-300 transition-all">
             <div class="flex items-center gap-3">
-                <div class="flex h-12 w-12 items-center justify-center rounded-full bg-rose-100 text-rose-600 font-bold text-sm">
+              <div class="flex h-12 w-12 items-center justify-center rounded-full bg-rose-100 text-rose-600 font-bold text-sm">
                 MD
-                </div>
-                <div>
+              </div>
+              <div>
                 <h4 class="font-bold text-slate-900 text-sm">Maria Dela Cruz</h4>
                 <p class="text-xs text-slate-500 font-medium">Spouse • 31 y/o • Female</p>
-                </div>
+              </div>
             </div>
             <div class="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center text-xs font-medium text-slate-600">
-                <span class="text-amber-600 font-bold">Prenatal Checkup Due</span>
-                <button type="button" data-tab-link="records" class="text-teal-600 font-bold hover:underline">View Records</button>
+              <span class="text-amber-600 font-bold">Prenatal Checkup Due</span>
+              <button type="button" data-tab-link="records" class="text-teal-600 font-bold hover:underline">View Records</button>
             </div>
-            </div>
+          </div>
+          <?php endif; ?>
         </div>
-        </section>
+      </section>
 
-        <!-- 6. EMERGENCY & REFERRAL TAB -->
-        <section data-tab-panel="emergency" class="hidden space-y-6">
+      <!-- 6. EMERGENCY & REFERRAL TAB -->
+      <section data-tab-panel="emergency" class="hidden space-y-6">
         <!-- Urgent Hotline Banner -->
         <div class="rounded-2xl bg-gradient-to-r from-rose-600 to-red-700 p-6 text-white shadow-lg space-y-4">
-            <div class="flex items-center gap-3">
+          <div class="flex items-center gap-3">
             <div class="rounded-full bg-white/20 p-2.5 text-white">
-                <i data-lucide="siren" class="h-6 w-6 animate-pulse"></i>
+              <i data-lucide="siren" class="h-6 w-6 animate-pulse"></i>
             </div>
             <div>
-                <h3 class="text-lg font-black tracking-tight">RHU Emergency & Quick Referral Desk</h3>
-                <p class="text-xs text-rose-100">For life-threatening situations, immediate ambulance transport, or urgent hospital referral.</p>
+              <h3 class="text-lg font-black tracking-tight">RHU Emergency & Quick Referral Desk</h3>
+              <p class="text-xs text-rose-100">For life-threatening situations, immediate ambulance transport, or urgent hospital referral.</p>
             </div>
-            </div>
+          </div>
 
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-2">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-2">
             <a href="tel:09123456789" class="flex items-center justify-between rounded-xl bg-white/10 hover:bg-white/20 p-3.5 transition-all text-xs font-bold border border-white/20">
-                <span class="flex items-center gap-2"><i data-lucide="phone-call" class="h-4 w-4 text-rose-200"></i> RHU Hotline</span>
-                <span class="font-mono text-white">0912-345-6789</span>
+              <span class="flex items-center gap-2"><i data-lucide="phone-call" class="h-4 w-4 text-rose-200"></i> RHU Hotline</span>
+              <span class="font-mono text-white">0912-345-6789</span>
             </a>
             <a href="tel:911" class="flex items-center justify-between rounded-xl bg-white/10 hover:bg-white/20 p-3.5 transition-all text-xs font-bold border border-white/20">
-                <span class="flex items-center gap-2"><i data-lucide="ambulance" class="h-4 w-4 text-rose-200"></i> MDRRMO Ambulance</span>
-                <span class="font-mono text-white">(042) 710-XXXX</span>
+              <span class="flex items-center gap-2"><i data-lucide="ambulance" class="h-4 w-4 text-rose-200"></i> MDRRMO Ambulance</span>
+              <span class="font-mono text-white">(042) 710-XXXX</span>
             </a>
             <a href="tel:117" class="flex items-center justify-between rounded-xl bg-white/10 hover:bg-white/20 p-3.5 transition-all text-xs font-bold border border-white/20">
-                <span class="flex items-center gap-2"><i data-lucide="shield-alert" class="h-4 w-4 text-rose-200"></i> Barangay Health Response</span>
-                <span class="font-mono text-white">Direct BHW</span>
+              <span class="flex items-center gap-2"><i data-lucide="shield-alert" class="h-4 w-4 text-rose-200"></i> Barangay Health Response</span>
+              <span class="font-mono text-white">Direct BHW</span>
             </a>
-            </div>
+          </div>
         </div>
 
         <!-- Quick Referral Form -->
         <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-2xs space-y-4">
-            <div class="flex items-center gap-2 text-rose-600">
+          <div class="flex items-center gap-2 text-rose-600">
             <i data-lucide="send" class="h-5 w-5"></i>
             <h4 class="text-sm font-bold text-slate-800">Send Instant Referral / Transport Request</h4>
-            </div>
-            
-            <form method="post" action="ResidentDashboard.php?tab=emergency" class="space-y-4 text-xs">
+          </div>
+
+          <form method="post" action="ResidentDashboard.php?tab=emergency" class="space-y-4 text-xs">
             <input type="hidden" name="form" value="emergency_request">
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
+              <div>
                 <label class="block font-bold text-slate-700 mb-1">Nature of Emergency</label>
                 <select name="emergency_nature" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500">
-                    <option value="Severe Injury / Fracture">Severe Injury / Accident</option>
-                    <option value="High Fever / Convulsion (Child)">High Fever / Convulsion (Child)</option>
-                    <option value="Maternal / Labor Urgency">Maternal Urgency / Severe Labor Pain</option>
-                    <option value="Difficulty Breathing / Asthma Attack">Difficulty Breathing / Asthma Attack</option>
-                    <option value="Severe Allergic Reaction">Severe Allergic Reaction</option>
-                    <option value="Other Medical Urgent Need">Other Medical Urgency</option>
+                  <option value="Severe Injury / Fracture">Severe Injury / Accident</option>
+                  <option value="High Fever / Convulsion (Child)">High Fever / Convulsion (Child)</option>
+                  <option value="Maternal / Labor Urgency">Maternal Urgency / Severe Labor Pain</option>
+                  <option value="Difficulty Breathing / Asthma Attack">Difficulty Breathing / Asthma Attack</option>
+                  <option value="Severe Allergic Reaction">Severe Allergic Reaction</option>
+                  <option value="Other Medical Urgent Need">Other Medical Urgency</option>
                 </select>
-                </div>
-                <div>
+              </div>
+              <div>
                 <label class="block font-bold text-slate-700 mb-1">Pickup / Patient Location</label>
                 <input type="text" name="pickup_location" required value="<?= esc(($resident['address'] ?? '') . ' ' . ($resident['barangay'] ?? '')) ?>" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 font-medium focus:outline-none focus:ring-2 focus:ring-rose-500" placeholder="Purok, Barangay, Landmark">
-                </div>
+              </div>
             </div>
             <button type="submit" class="w-full rounded-xl bg-rose-600 py-3 text-xs font-bold text-white hover:bg-rose-700 transition-all flex items-center justify-center gap-2">
-                <i data-lucide="alert-triangle" class="h-4 w-4"></i> Submit Emergency Referral Request
+              <i data-lucide="alert-triangle" class="h-4 w-4"></i> Submit Emergency Referral Request
             </button>
-            </form>
+          </form>
         </div>
-        </section>
+      </section>
 
     </main>
+  </div>
+
+  <!-- Logout Confirmation Modal -->
+  <div id="logout-modal" class="fixed inset-0 z-[80] hidden items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="logout-title">
+    <div class="w-full max-w-sm overflow-hidden rounded-3xl border border-white/70 bg-white shadow-2xl">
+      <div class="bg-gradient-to-br from-rose-50 via-white to-amber-50 p-6 text-center">
+        <span class="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-100 text-rose-600 shadow-sm"><i data-lucide="log-out" class="h-7 w-7"></i></span>
+        <h3 id="logout-title" class="mt-4 text-lg font-black text-slate-900">Log out of your account?</h3>
+        <p class="mt-2 text-sm leading-6 text-slate-500">You will need to sign in again to access your health records and resident services.</p>
+      </div>
+      <div class="flex gap-3 border-t border-slate-100 bg-white p-4">
+        <button type="button" data-logout-cancel class="flex-1 rounded-xl border border-slate-200 py-3 text-xs font-bold text-slate-600 hover:bg-slate-50">Stay signed in</button>
+        <a href="ResidentDashboard.php?logout=1" class="flex flex-1 items-center justify-center rounded-xl bg-rose-600 py-3 text-xs font-bold text-white shadow-lg shadow-rose-600/20 hover:bg-rose-700">Yes, log out</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Dependent Modal -->
+  <div id="dependent-modal" class="fixed inset-0 z-[60] hidden items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
+    <div class="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl border border-white/70 bg-white shadow-2xl">
+      <div class="sticky top-0 z-10 flex items-start justify-between border-b border-slate-100 bg-gradient-to-r from-teal-50 to-sky-50 px-6 py-5">
+        <div class="flex gap-3">
+          <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-600 to-sky-600 text-white shadow-md"><i data-lucide="user-round-plus" class="h-5 w-5"></i></span>
+          <div><h3 class="text-base font-black text-slate-900">Add Household Dependent</h3><p class="mt-1 text-xs text-slate-500">Create a profile linked to your resident account.</p></div>
+        </div>
+        <button type="button" data-dependent-close class="rounded-xl p-2 text-slate-500 hover:bg-white hover:text-slate-800" aria-label="Close dependent form"><i data-lucide="x" class="h-5 w-5"></i></button>
+      </div>
+      <form method="post" action="ResidentDashboard.php?tab=family" class="space-y-5 p-6 text-xs">
+        <input type="hidden" name="form" value="add_dependent">
+        <input type="hidden" name="csrf_token" value="<?= esc($dashboardCsrf) ?>">
+        <div>
+          <p class="mb-3 font-bold uppercase tracking-wider text-slate-400">Personal information</p>
+          <div class="grid gap-4 sm:grid-cols-2">
+            <label class="space-y-1.5"><span class="font-bold text-slate-700">First name <b class="text-rose-500">*</b></span><input required maxlength="100" name="first_name" value="<?= esc($_POST['first_name'] ?? '') ?>" class="w-full rounded-xl border border-slate-200 px-3 py-3 font-medium outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-100" placeholder="First name"></label>
+            <label class="space-y-1.5"><span class="font-bold text-slate-700">Middle name</span><input maxlength="100" name="middle_name" value="<?= esc($_POST['middle_name'] ?? '') ?>" class="w-full rounded-xl border border-slate-200 px-3 py-3 font-medium outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-100" placeholder="Optional"></label>
+            <label class="space-y-1.5"><span class="font-bold text-slate-700">Last name <b class="text-rose-500">*</b></span><input required maxlength="100" name="last_name" value="<?= esc($_POST['last_name'] ?? '') ?>" class="w-full rounded-xl border border-slate-200 px-3 py-3 font-medium outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-100" placeholder="Last name"></label>
+            <label class="space-y-1.5"><span class="font-bold text-slate-700">Relationship <b class="text-rose-500">*</b></span><select required name="relationship" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-medium outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-100"><option value="">Select relationship</option><?php foreach (['Child','Spouse','Parent','Sibling','Grandchild','Other'] as $option): ?><option <?= ($_POST['relationship'] ?? '') === $option ? 'selected' : '' ?>><?= $option ?></option><?php endforeach; ?></select></label>
+          </div>
+        </div>
+        <div>
+          <p class="mb-3 font-bold uppercase tracking-wider text-slate-400">Health profile</p>
+          <div class="grid gap-4 sm:grid-cols-3">
+            <label class="space-y-1.5"><span class="font-bold text-slate-700">Date of birth <b class="text-rose-500">*</b></span><input required type="date" max="<?= date('Y-m-d') ?>" name="date_of_birth" value="<?= esc($_POST['date_of_birth'] ?? '') ?>" class="w-full rounded-xl border border-slate-200 px-3 py-3 font-medium outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-100"></label>
+            <label class="space-y-1.5"><span class="font-bold text-slate-700">Gender</span><select name="gender" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-medium outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-100"><option value="">Select</option><?php foreach (['Female','Male','Other','Prefer not to say'] as $option): ?><option <?= ($_POST['gender'] ?? '') === $option ? 'selected' : '' ?>><?= $option ?></option><?php endforeach; ?></select></label>
+            <label class="space-y-1.5"><span class="font-bold text-slate-700">Blood type</span><select name="blood_type" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-medium outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-100"><option value="">Unknown</option><?php foreach (['A+','A-','B+','B-','AB+','AB-','O+','O-'] as $option): ?><option <?= ($_POST['blood_type'] ?? '') === $option ? 'selected' : '' ?>><?= $option ?></option><?php endforeach; ?></select></label>
+          </div>
+        </div>
+        <label class="block space-y-1.5"><span class="font-bold text-slate-700">Medical notes</span><textarea maxlength="1000" name="medical_notes" rows="3" class="w-full resize-none rounded-xl border border-slate-200 px-3 py-3 font-medium outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-100" placeholder="Allergies, conditions, or other important notes"><?= esc($_POST['medical_notes'] ?? '') ?></textarea></label>
+        <div class="flex flex-col-reverse gap-2 border-t border-slate-100 pt-5 sm:flex-row sm:justify-end">
+          <button type="button" data-dependent-close class="rounded-xl border border-slate-200 px-5 py-3 font-bold text-slate-600 hover:bg-slate-50">Cancel</button>
+          <button type="submit" class="rounded-xl bg-gradient-to-r from-teal-600 to-sky-600 px-5 py-3 font-bold text-white shadow-lg shadow-teal-600/20 hover:from-teal-700 hover:to-sky-700"><i data-lucide="user-plus" class="mr-1 inline h-4 w-4"></i>Add Dependent</button>
+        </div>
+      </form>
+    </div>
   </div>
 
   <!-- OPD Appointment Modal -->
@@ -877,15 +1211,15 @@ $events = [
       const panels = document.querySelectorAll('[data-tab-panel]');
 
       const tabTitles = {
-        'home': 'Overview',
+        'home': 'Resident Dashboard',
         'records': 'Health Records',
         'immunization': 'Immunization History',
         'certificates': 'My Certificates',
-        'family': 'Household Profile',
-        'emergency': 'Emergency & Referral Desk',
+        'family': 'Family Members',
         'events': 'Events & Health Programs',
-        'contact': 'Contact RHU'
-    };
+        'contact': 'Contact RHU',
+        'emergency': 'Emergency & Referral'
+      };
 
       if (collapseBtn) {
         collapseBtn.addEventListener('click', () => {
@@ -898,9 +1232,13 @@ $events = [
         if (isOpen) {
           sidebar.classList.add('-translate-x-full');
           sidebarOverlay.classList.add('hidden');
+          sidebarOverlay.setAttribute('aria-hidden', 'true');
+          document.body.classList.remove('overflow-hidden');
         } else {
           sidebar.classList.remove('-translate-x-full');
           sidebarOverlay.classList.remove('hidden');
+          sidebarOverlay.setAttribute('aria-hidden', 'false');
+          document.body.classList.add('overflow-hidden');
         }
       };
 
@@ -908,44 +1246,46 @@ $events = [
       if (sidebarOverlay) sidebarOverlay.addEventListener('click', toggleMobileSidebar);
 
       const setTab = (tab) => {
-        panels.forEach(panel => panel.classList.toggle('hidden', panel.dataset.tabPanel !== tab));
-        
-        buttons.forEach(button => {
-            const active = button.dataset.tabButton === tab;
-            button.classList.toggle('nav-active', active);
-        });
+      panels.forEach(panel => panel.classList.toggle('hidden', panel.dataset.tabPanel !== tab));
 
-        // Breadcrumb logic na may Clickable "Resident Dashboard"
-        if (tabTitles[tab]) {
-            if (tab === 'home') {
-            pageTitle.innerHTML = `<span class="font-bold text-slate-800">Resident Dashboard</span>`;
-            } else {
-            pageTitle.innerHTML = `
-                <button type="button" data-breadcrumb-home class="text-slate-400 font-medium hover:text-teal-600 hover:underline transition-colors focus:outline-none">
-                Resident Dashboard
-                </button>
-                <i data-lucide="chevron-right" class="inline-block h-4 w-4 text-slate-400 mx-1"></i>
-                <span class="font-bold text-slate-800">${tabTitles[tab]}</span>
-            `;
+      buttons.forEach(button => {
+        const active = button.dataset.tabButton === tab;
+        button.classList.toggle('nav-active', active);
+      });
 
-            // Lagyan ng click event para kapag pinindot ang "Resident Dashboard" ay babalik sa home tab
-            const homeBreadcrumbBtn = pageTitle.querySelector('[data-breadcrumb-home]');
-            if (homeBreadcrumbBtn) {
-                homeBreadcrumbBtn.addEventListener('click', () => setTab('home'));
-            }
+      // Breadcrumb logic na may Clickable "Resident Dashboard"
+      if (tabTitles[tab]) {
+        if (tab === 'home') {
+          pageTitle.innerHTML = `<span class="font-bold text-slate-800">Resident Dashboard</span>`;
+        } else {
+          pageTitle.innerHTML = `
+            <button type="button" data-breadcrumb-home class="text-slate-400 font-medium hover:text-teal-600 hover:underline transition-colors focus:outline-none">
+              Resident Dashboard
+            </button>
+            <i data-lucide="chevron-right" class="inline-block h-4 w-4 text-slate-400 mx-1"></i>
+            <span class="font-bold text-slate-800">${tabTitles[tab]}</span>
+          `;
 
-            // I-re-render ang Lucide chevron icon
-            if (window.lucide) lucide.createIcons();
-            }
+          // Lagyan ng click event para kapag pinindot ang "Resident Dashboard" ay babalik sa home tab
+          const homeBreadcrumbBtn = pageTitle.querySelector('[data-breadcrumb-home]');
+          if (homeBreadcrumbBtn) {
+            homeBreadcrumbBtn.addEventListener('click', () => setTab('home'));
+          }
+
+          // I-re-render ang Lucide chevron icon
+          if (window.lucide) lucide.createIcons();
         }
+      }
 
-        if (window.innerWidth < 768) {
-            sidebar.classList.add('-translate-x-full');
-            sidebarOverlay.classList.add('hidden');
-        }
+      if (window.innerWidth < 768) {
+        sidebar.classList.add('-translate-x-full');
+        sidebarOverlay.classList.add('hidden');
+        sidebarOverlay.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('overflow-hidden');
+      }
 
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        };
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
 
       buttons.forEach(button => button.addEventListener('click', () => setTab(button.dataset.tabButton)));
       document.querySelectorAll('[data-tab-link]').forEach(button => button.addEventListener('click', () => setTab(button.dataset.tabLink)));
@@ -965,8 +1305,74 @@ $events = [
         const closeButton = document.querySelector('[data-close-notifications]');
         if (closeButton) closeButton.addEventListener('click', () => notificationPanel.classList.add('hidden'));
       }
+
+      const dependentModal = document.getElementById('dependent-modal');
+      const openDependentModal = () => {
+        dependentModal.classList.remove('hidden');
+        dependentModal.classList.add('flex');
+        document.body.classList.add('overflow-hidden');
+      };
+      const closeDependentModal = () => {
+        dependentModal.classList.add('hidden');
+        dependentModal.classList.remove('flex');
+        document.body.classList.remove('overflow-hidden');
+      };
+      document.querySelectorAll('[data-dependent-open]').forEach(button => button.addEventListener('click', openDependentModal));
+      document.querySelectorAll('[data-dependent-close]').forEach(button => button.addEventListener('click', closeDependentModal));
+      dependentModal.addEventListener('click', event => { if (event.target === dependentModal) closeDependentModal(); });
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') closeDependentModal(); });
+      <?php if ($dependentErrors): ?>openDependentModal();<?php endif; ?>
+
+      const logoutModal = document.getElementById('logout-modal');
+      const openLogoutModal = event => {
+        event.preventDefault();
+        logoutModal.classList.remove('hidden');
+        logoutModal.classList.add('flex');
+        document.body.classList.add('overflow-hidden');
+        logoutModal.querySelector('[data-logout-cancel]').focus();
+      };
+      const closeLogoutModal = () => {
+        logoutModal.classList.add('hidden');
+        logoutModal.classList.remove('flex');
+        document.body.classList.remove('overflow-hidden');
+      };
+      document.querySelectorAll('[data-logout-link]').forEach(link => link.addEventListener('click', openLogoutModal));
+      document.querySelectorAll('[data-logout-cancel]').forEach(button => button.addEventListener('click', closeLogoutModal));
+      logoutModal.addEventListener('click', event => { if (event.target === logoutModal) closeLogoutModal(); });
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') closeLogoutModal(); });
+
+      const revealItems = document.querySelectorAll(
+        '[data-tab-panel] > div, [data-tab-panel] > article, [data-tab-panel] form'
+      );
+      if ('IntersectionObserver' in window && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        const revealObserver = new IntersectionObserver(entries => {
+          entries.forEach(entry => {
+            if (entry.isIntersecting) {
+              entry.target.classList.add('is-visible');
+              revealObserver.unobserve(entry.target);
+            }
+          });
+        }, { threshold: 0.08, rootMargin: '0px 0px -24px' });
+
+        revealItems.forEach((item, index) => {
+          item.classList.add('reveal-on-scroll');
+          item.style.transitionDelay = `${Math.min(index % 4, 3) * 55}ms`;
+          revealObserver.observe(item);
+        });
+      } else {
+        revealItems.forEach(item => item.classList.add('is-visible'));
+      }
+
+      const scrollProgress = document.getElementById('scroll-progress');
+      const updateScrollProgress = () => {
+        const scrollable = document.documentElement.scrollHeight - window.innerHeight;
+        const progress = scrollable > 0 ? Math.min((window.scrollY / scrollable) * 100, 100) : 0;
+        scrollProgress.style.width = `${progress}%`;
+      };
+      updateScrollProgress();
+      window.addEventListener('scroll', updateScrollProgress, { passive: true });
+      window.addEventListener('resize', updateScrollProgress);
     })();
   </script>
 </body>
 </html>
-

@@ -14,3 +14,9 @@
 [2026-07-25 11:07:56] TO: chedricbascoguin27@gmail.com | CODE: 415827 | SUBJECT: RedPulse RHU - Your 2-Factor Authentication (2FA) Code
 [2026-07-25 14:03:14] TO: chedricbascoguin27@gmail.com | CODE: 578852 | SUBJECT: RedPulse RHU - Your 2-Factor Authentication (2FA) Code
 [2026-07-25 23:49:26] TO: bascoguinchedric20@gmail.com | CODE: 815934 | SUBJECT: ResiHUnity RHU - Your 2-Factor Authentication (2FA) Code
+[2026-07-26 03:01:40] TO: 23-75584@g.batstate-u.edu.ph | SUBJECT: ResiHUnity RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (SMTP)
+[2026-07-26 03:10:52] TO: 23-75584@g.batstate-u.edu.ph | SUBJECT: ResiHUnity RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (SMTP)
+[2026-07-26 03:24:40] TO: 23-75584@g.batstate-u.edu.ph | SUBJECT: ResiHUnity RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (SMTP)
+[2026-07-26 03:35:24] TO: 23-75584@g.batstate-u.edu.ph | SUBJECT: ResiHUnity RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (SMTP)
+[2026-07-26 03:47:32] TO: 23-75584@g.batstate-u.edu.ph | SUBJECT: ResiHUnity RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (SMTP)
+[2026-07-26 14:25:52] TO: 23-75584@g.batstate-u.edu.ph | SUBJECT: ResiHUnity RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (SMTP)
