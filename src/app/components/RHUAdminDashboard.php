@@ -3,6 +3,52 @@ if (session_status() === PHP_SESSION_NONE) session_start();
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/portal.php';
 require_once __DIR__ . '/mailer.php';
+require_once __DIR__ . '/admin_extended.php';
+portalRequireAdmin();
+
+if (isset($_GET['logout'])) {
+    portalAudit($pdo, (int)($_SESSION['user']['user_id'] ?? 0), 'RHU Admin Logout', 'users', (int)($_SESSION['user']['user_id'] ?? 0));
+    $_SESSION = [];
+    if (ini_get('session.use_cookies')) {
+        $params = session_get_cookie_params();
+        setcookie(session_name(), '', time() - 42000, $params['path'], $params['domain'], $params['secure'], $params['httponly']);
+    }
+    session_destroy();
+    header('Location: RHUAdminLogin.php');
+    exit;
+}
+
+if (($_GET['export'] ?? '') === 'summary' && $pdo) {
+    portalAudit($pdo, (int)$_SESSION['user']['user_id'], 'Exported dashboard summary report', 'reports', null);
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="rhu-summary-' . date('Y-m-d') . '.csv"');
+    $output = fopen('php://output', 'wb');
+    fputcsv($output, ['Metric', 'Count']);
+    foreach ([
+        'Users' => 'users',
+        'Active Staff' => 'staff WHERE is_active = 1',
+        'Residents' => 'residents',
+        'Consultations' => 'consultations',
+        'Pregnancies' => 'pregnancies',
+        'Vaccinations' => 'vaccination_records',
+        'Disease Cases' => 'disease_cases',
+        'Medicine Items' => 'medicine_inventory',
+    ] as $label => $source) {
+        fputcsv($output, [$label, (int)$pdo->query("SELECT COUNT(*) FROM {$source}")->fetchColumn()]);
+    }
+    fclose($output);
+    exit;
+}
+
+if (($_GET['backup'] ?? '') === 'sql' && $pdo) {
+    portalAudit($pdo, (int)$_SESSION['user']['user_id'], 'Downloaded SQL database backup', 'system', null);
+    adminDownloadSqlBackup($pdo);
+}
+
+if (isset($_GET['certificate_pdf']) && ctype_digit((string)$_GET['certificate_pdf']) && $pdo) {
+    portalAudit($pdo, (int)$_SESSION['user']['user_id'], 'Downloaded certificate PDF', 'health_certificates', (int)$_GET['certificate_pdf']);
+    adminDownloadCertificatePdf($pdo, (int)$_GET['certificate_pdf']);
+}
 
 /**
  * Escape output for HTML.
@@ -43,6 +89,11 @@ function iconSvg(string $name, string $class = 'w-5 h-5'): string
         'mail' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>',
         'phone' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.18 2 2 0 0 1 4.09 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.77.6 2.6a2 2 0 0 1-.45 2.11L8 9a16 16 0 0 0 7 7l.57-1.24a2 2 0 0 1 2.11-.45c.83.27 1.7.48 2.6.6A2 2 0 0 1 22 16.92z"/></svg>',
         'key' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.5 12.5L21 2"/><path d="M17 5l2 2"/></svg>',
+        'menu' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>',
+        'close' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+        'baby' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12h.01M15 12h.01"/><path d="M10 16c.5.35 1.17.5 2 .5s1.5-.15 2-.5"/><path d="M12 3a9 9 0 1 0 9 9c0-2.5-1-4.7-2.7-6.3"/><path d="M12 3c2 0 3 1 3 2.5S14 8 12 8"/></svg>',
+        'alert' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 2.9 1.8 17a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 2.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>',
+        'pill' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m10.5 20.5 10-10a5 5 0 0 0-7-7l-10 10a5 5 0 0 0 7 7Z"/><path d="m8.5 8.5 7 7"/></svg>',
     ];
 
     return $icons[$name] ?? '';
@@ -58,18 +109,22 @@ $flashSuccess = '';
 $flashError = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
+    if (!portalVerifyCsrf()) {
+        http_response_code(419);
+        exit('Invalid or expired form token. Refresh the page and try again.');
+    }
     $action = $_POST['action'] ?? '';
 
     // Action: Update Facility Profile Info (System Tab)
     if ($action === 'update_rhu_info') {
-        $_SESSION['rhu_info_custom'] = [
-            'name' => trim($_POST['rhu_name'] ?? 'Nasugbu Rural Health Unit I'),
-            'mho_name' => trim($_POST['mho_name'] ?? 'Dr. Chedric Bascoguin'),
-            'municipality' => trim($_POST['municipality'] ?? 'Nasugbu'),
-            'province' => trim($_POST['province'] ?? 'Batangas'),
-            'contact' => trim($_POST['contact'] ?? '(043) 416-1234'),
-            'email' => trim($_POST['email'] ?? 'chedricbascoguin27@gmail.com'),
-        ];
+        portalSaveSettings($pdo, [
+            'rhu_name' => $_POST['rhu_name'] ?? '',
+            'rhu_mho_name' => $_POST['mho_name'] ?? '',
+            'rhu_municipality' => $_POST['municipality'] ?? '',
+            'rhu_province' => $_POST['province'] ?? '',
+            'rhu_contact_number' => $_POST['contact'] ?? '',
+            'rhu_email' => $_POST['email'] ?? '',
+        ]);
         portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Updated RHU Facility Settings", 'system', 1);
         $flashSuccess = "RHU Facility information updated successfully!";
     }
@@ -122,10 +177,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
     if ($action === 'approve_certificate') {
         $certId = (int)($_POST['request_id'] ?? 0);
         if ($certId > 0) {
+            $residentId = (int)$pdo->query("SELECT resident_id FROM health_certificates WHERE id = {$certId}")->fetchColumn();
             $certNo = 'CERT-' . date('Y') . '-' . str_pad((string)$certId, 4, '0', STR_PAD_LEFT);
-            $stmt = $pdo->prepare("UPDATE certificate_requests SET status = 'Approved & Issued', certificate_number = :cert_no, issue_date = CURDATE() WHERE id = :id");
+            $stmt = $pdo->prepare("UPDATE health_certificates SET validity_status = 'Approved & Issued', certificate_number = :cert_no, issue_date = CURDATE(), rejection_reason = NULL WHERE id = :id");
             $stmt->execute(['cert_no' => $certNo, 'id' => $certId]);
-            portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Approved Certificate Request #{$certId} (Cert No: {$certNo})", 'certificate_requests', $certId);
+            portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Approved Certificate Request #{$certId} (Cert No: {$certNo})", 'health_certificates', $certId);
+            portalNotifyResident($pdo, $residentId, "Your certificate {$certNo} is approved and ready.", 'ResidentDashboard.php?tab=certificates');
             $flashSuccess = "Certificate request #{$certId} approved and issued successfully!";
         }
     }
@@ -135,9 +192,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
         $certId = (int)($_POST['request_id'] ?? 0);
         $reason = trim($_POST['rejection_reason'] ?? 'Requirements incomplete');
         if ($certId > 0) {
-            $stmt = $pdo->prepare("UPDATE certificate_requests SET status = 'Rejected', rejection_reason = :reason WHERE id = :id");
+            $residentId = (int)$pdo->query("SELECT resident_id FROM health_certificates WHERE id = {$certId}")->fetchColumn();
+            $stmt = $pdo->prepare("UPDATE health_certificates SET validity_status = 'Rejected', rejection_reason = :reason WHERE id = :id");
             $stmt->execute(['reason' => $reason, 'id' => $certId]);
-            portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Rejected Certificate Request #{$certId}", 'certificate_requests', $certId);
+            portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Rejected Certificate Request #{$certId}", 'health_certificates', $certId);
+            portalNotifyResident($pdo, $residentId, 'Your certificate request was rejected: ' . $reason, 'ResidentDashboard.php?tab=certificates');
             $flashSuccess = "Certificate request #{$certId} rejected.";
         }
     }
@@ -147,9 +206,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
         $msgId = (int)($_POST['message_id'] ?? 0);
         $reply = trim($_POST['reply'] ?? '');
         if ($msgId > 0 && $reply !== '') {
+            $residentId = (int)$pdo->query("SELECT resident_id FROM messages WHERE id = {$msgId}")->fetchColumn();
             $stmt = $pdo->prepare("UPDATE messages SET admin_reply = :reply, status = 'Replied', replied_at = NOW() WHERE id = :id");
             $stmt->execute(['reply' => $reply, 'id' => $msgId]);
             portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Replied to Resident Message #{$msgId}", 'messages', $msgId);
+            portalNotifyResident($pdo, $residentId, 'RHU staff replied to your message.', 'ResidentDashboard.php?tab=contact');
             $flashSuccess = "Reply sent to resident message #{$msgId}.";
         }
     }
@@ -158,11 +219,126 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
     if ($action === 'confirm_event') {
         $eventId = (int)($_POST['event_id'] ?? 0);
         if ($eventId > 0) {
-            $stmt = $pdo->prepare("UPDATE event_registrations SET status = 'Confirmed' WHERE id = :id");
-            $stmt->execute(['id' => $eventId]);
+            $stmt = $pdo->prepare("UPDATE event_registrations SET status = 'Confirmed', confirmed_at = NOW(), confirmed_by = :admin_id WHERE id = :id");
+            $stmt->execute(['admin_id' => (int)$_SESSION['user']['user_id'], 'id' => $eventId]);
             portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Confirmed Event Registration #{$eventId}", 'event_registrations', $eventId);
             $flashSuccess = "Event registration #{$eventId} confirmed.";
         }
+    }
+
+    if ($action === 'mark_notifications_read') {
+        $stmt = $pdo->prepare("UPDATE portal_notifications SET is_read = 1 WHERE user_id = :user_id OR audience_role IN ('RHU_ADMIN', 'SUPER_ADMIN', 'ADMIN_STAFF')");
+        $stmt->execute(['user_id' => (int)$_SESSION['user']['user_id']]);
+        $flashSuccess = 'Notifications marked as read.';
+    }
+
+    if ($action === 'update_resident_status') {
+        $id = (int)($_POST['resident_id'] ?? 0);
+        $status = (int)($_POST['new_status'] ?? 0);
+        $stmt = $pdo->prepare('UPDATE residents SET is_active = :status WHERE id = :id');
+        $stmt->execute(['status' => $status, 'id' => $id]);
+        portalAudit($pdo, (int)$_SESSION['user']['user_id'], 'Updated resident status', 'residents', $id);
+        $flashSuccess = 'Resident status updated.';
+    }
+
+    if ($action === 'update_consultation') {
+        $id = (int)($_POST['consultation_id'] ?? 0);
+        $stmt = $pdo->prepare('UPDATE consultations SET diagnosis = :diagnosis, treatment_plan = :treatment_plan, follow_up_date = :follow_up_date, physician_id = COALESCE(:physician_id, physician_id), consultation_status = :status WHERE id = :id');
+        $stmt->execute([
+            'diagnosis' => trim($_POST['diagnosis'] ?? ''),
+            'treatment_plan' => trim($_POST['treatment_plan'] ?? ''),
+            'follow_up_date' => ($_POST['follow_up_date'] ?? '') ?: null,
+            'physician_id' => ($_POST['physician_id'] ?? '') ?: null,
+            'status' => trim($_POST['consultation_status'] ?? 'Scheduled'),
+            'id' => $id,
+        ]);
+        portalAudit($pdo, (int)$_SESSION['user']['user_id'], 'Updated consultation', 'consultations', $id);
+        $flashSuccess = 'Consultation updated.';
+    }
+
+    if ($action === 'update_pregnancy') {
+        $id = (int)($_POST['pregnancy_id'] ?? 0);
+        $stmt = $pdo->prepare('UPDATE pregnancies SET pregnancy_status = :status, high_risk = :high_risk WHERE id = :id');
+        $stmt->execute(['status' => trim($_POST['status'] ?? 'Active'), 'high_risk' => isset($_POST['high_risk']) ? 1 : 0, 'id' => $id]);
+        portalAudit($pdo, (int)$_SESSION['user']['user_id'], 'Updated maternal case', 'pregnancies', $id);
+        $flashSuccess = 'Maternal case updated.';
+    }
+
+    if ($action === 'update_disease_case') {
+        $id = (int)($_POST['case_id'] ?? 0);
+        $stmt = $pdo->prepare('UPDATE disease_cases SET case_classification = :classification, outcome = :outcome, reported_to_doh = :reported WHERE id = :id');
+        $stmt->execute([
+            'classification' => trim($_POST['classification'] ?? 'Suspected'),
+            'outcome' => trim($_POST['outcome'] ?? ''),
+            'reported' => isset($_POST['reported_to_doh']) ? 1 : 0,
+            'id' => $id,
+        ]);
+        portalAudit($pdo, (int)$_SESSION['user']['user_id'], 'Updated disease surveillance case', 'disease_cases', $id);
+        $flashSuccess = 'Disease case updated.';
+    }
+
+    if ($action === 'adjust_medicine_stock') {
+        $id = (int)($_POST['medicine_id'] ?? 0);
+        $quantity = (int)($_POST['quantity_change'] ?? 0);
+        if ($id > 0 && $quantity !== 0) {
+            $pdo->beginTransaction();
+            try {
+                $stmt = $pdo->prepare('UPDATE medicine_inventory SET quantity_in_stock = GREATEST(0, quantity_in_stock + :quantity), last_updated = NOW() WHERE id = :id');
+                $stmt->execute(['quantity' => $quantity, 'id' => $id]);
+                $stmt = $pdo->prepare("INSERT INTO stock_transactions (medicine_id, transaction_type, quantity, transaction_date, reason) VALUES (:id, :type, :quantity, CURDATE(), :reason)");
+                $stmt->execute(['id' => $id, 'type' => $quantity > 0 ? 'In' : 'Out', 'quantity' => abs($quantity), 'reason' => trim($_POST['reason'] ?? 'Admin adjustment')]);
+                $pdo->commit();
+                portalAudit($pdo, (int)$_SESSION['user']['user_id'], 'Adjusted medicine stock', 'medicine_inventory', $id);
+                $flashSuccess = 'Medicine stock adjusted.';
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                throw $e;
+            }
+        }
+    }
+
+    if ($action === 'update_smtp_settings') {
+        portalSaveSettings($pdo, [
+            'smtp_host' => $_POST['smtp_host'] ?? '',
+            'smtp_port' => $_POST['smtp_port'] ?? '587',
+            'smtp_encryption' => $_POST['smtp_encryption'] ?? 'tls',
+            'smtp_user' => $_POST['smtp_user'] ?? '',
+            'two_factor_enabled' => isset($_POST['two_factor_enabled']) ? '1' : '0',
+        ]);
+        portalAudit($pdo, (int)$_SESSION['user']['user_id'], 'Updated mail and 2FA settings', 'portal_settings', null);
+        $flashSuccess = 'Mail and 2FA settings saved.';
+    }
+
+    if ($action === 'create_event') {
+        $title = trim($_POST['title'] ?? '');
+        $scheduledDate = trim($_POST['scheduled_date'] ?? '');
+        if ($title !== '' && $scheduledDate !== '') {
+            $stmt = $pdo->prepare(
+                "INSERT INTO portal_events (event_date, scheduled_date, start_time, title, venue, description, capacity, status)
+                 VALUES (:display_date, :scheduled_date, :start_time, :title, :venue, :description, :capacity, 'Scheduled')"
+            );
+            $stmt->execute([
+                'display_date' => date('F j, Y', strtotime($scheduledDate)),
+                'scheduled_date' => $scheduledDate,
+                'start_time' => ($_POST['start_time'] ?? '') ?: null,
+                'title' => $title,
+                'venue' => trim($_POST['venue'] ?? 'Nasugbu RHU'),
+                'description' => trim($_POST['description'] ?? ''),
+                'capacity' => ($_POST['capacity'] ?? '') ?: null,
+            ]);
+            portalAudit($pdo, (int)$_SESSION['user']['user_id'], 'Created RHU event', 'portal_events', (int)$pdo->lastInsertId());
+            portalNotify($pdo, "New RHU event scheduled: {$title}", null, 'RESIDENT', 'ResidentDashboard.php?tab=events');
+            $flashSuccess = 'Event created and published to the Resident Portal.';
+        }
+    }
+
+    if ($action === 'update_user_role') {
+        $userId = (int)($_POST['user_id'] ?? 0);
+        $roleId = (int)($_POST['role_id'] ?? 0);
+        $stmt = $pdo->prepare('UPDATE users SET role_id = :role_id WHERE id = :id');
+        $stmt->execute(['role_id' => $roleId, 'id' => $userId]);
+        portalAudit($pdo, (int)$_SESSION['user']['user_id'], 'Changed user role', 'users', $userId);
+        $flashSuccess = 'User role updated.';
     }
 
     // Action: Toggle User Status
@@ -462,13 +638,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
 
 
 // RHU Profile Settings
-$rhuProfile = $_SESSION['rhu_info_custom'] ?? [
-    'name' => 'Nasugbu Rural Health Unit I',
-    'mho_name' => 'Dr. Chedric Bascoguin',
-    'municipality' => 'Nasugbu',
-    'province' => 'Batangas',
-    'contact' => '(043) 416-1234',
-    'email' => 'chedricbascoguin27@gmail.com',
+$savedPortalSettings = portalSettings($pdo);
+$rhuProfile = [
+    'name' => portalSetting($savedPortalSettings, 'rhu_name', 'Nasugbu Rural Health Unit I'),
+    'mho_name' => portalSetting($savedPortalSettings, 'rhu_mho_name', 'Municipal Health Officer'),
+    'municipality' => portalSetting($savedPortalSettings, 'rhu_municipality', 'Nasugbu'),
+    'province' => portalSetting($savedPortalSettings, 'rhu_province', 'Batangas'),
+    'contact' => portalSetting($savedPortalSettings, 'rhu_contact_number', '(043) 416-1234'),
+    'email' => portalSetting($savedPortalSettings, 'rhu_email', ''),
 ];
 
 // ----------------------------------------------------
@@ -490,12 +667,29 @@ $dbAnnouncementsList = [];
 $dbPortalEventsList = [];
 $adminNotifications = [];
 
+// Clinical data
+$dbConsultationsList = [];
+$dbMaternalCases = [];
+$dbVaccinationRecords = [];
+$dbDiseaseCases = [];
+$dbMedicineInventory = [];
+$dbVitalStatistics = [];
+
 $barangayStats = [];
 $staffTypeStats = [];
 $roleStats = [];
+$dbRoles = [];
+$consultationStats = [];
+$maternalStats = [];
+$vaccinationStats = [];
+$diseaseStats = [];
+$medicineStats = [];
+$databaseHealth = ['name' => rhuEnv('DB_NAME', 'rhu'), 'version' => 'Unavailable', 'tables' => 0];
 
 if (!empty($pdo)) {
     try {
+        $databaseHealth['version'] = (string)$pdo->query('SELECT VERSION()')->fetchColumn();
+        $databaseHealth['tables'] = (int)$pdo->query('SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()')->fetchColumn();
         $totalUsersCount = (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn();
         $totalStaffCount = (int)$pdo->query("SELECT COUNT(*) FROM staff WHERE is_active = 1")->fetchColumn();
         $totalBhwCount = (int)$pdo->query("SELECT COUNT(*) FROM staff WHERE staff_type = 'BHW' AND is_active = 1")->fetchColumn();
@@ -556,16 +750,105 @@ if (!empty($pdo)) {
 
         try {
             $eStmt = $pdo->query("
-                SELECT e.id, e.resident_id, r.first_name, r.last_name, e.event_title, e.event_date, e.status, e.created_at
-                FROM event_registrations e
-                LEFT JOIN residents r ON e.resident_id = r.id
-                ORDER BY e.created_at DESC LIMIT 50
+                SELECT er.id, er.resident_id, r.first_name, r.last_name, pe.title AS event_title,
+                       pe.event_date, er.status, er.registered_at AS created_at
+                FROM event_registrations er
+                JOIN portal_events pe ON pe.id = er.event_id
+                LEFT JOIN residents r ON er.resident_id = r.id
+                ORDER BY er.registered_at DESC LIMIT 50
             ");
             $dbEventsList = $eStmt->fetchAll(PDO::FETCH_ASSOC);
-        } catch (Exception $e) {}
+        } catch (Exception $e) { error_log('Admin event registrations: ' . $e->getMessage()); }
 
         $barangayStats = $pdo->query("SELECT barangay, COUNT(*) AS count FROM residents GROUP BY barangay ORDER BY count DESC")->fetchAll(PDO::FETCH_ASSOC);
         $staffTypeStats = $pdo->query("SELECT staff_type, COUNT(*) AS count FROM staff GROUP BY staff_type ORDER BY count DESC")->fetchAll(PDO::FETCH_ASSOC);
+        $dbRoles = $pdo->query("SELECT id, name FROM roles ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
+
+        // CLINICAL DATA QUERIES
+        // Consultations
+        try {
+            $cslStmt = $pdo->query("
+                SELECT c.id, c.resident_id, r.first_name, r.last_name, r.barangay, c.chief_complaint, c.diagnosis, c.physician_id, c.consultation_date, c.consultation_status
+                FROM consultations c
+                LEFT JOIN residents r ON c.resident_id = r.id
+                ORDER BY c.consultation_date DESC LIMIT 100
+            ");
+            $dbConsultationsList = $cslStmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {}
+
+        // Maternal Health Cases
+        try {
+            $mtlStmt = $pdo->query("
+                SELECT p.id, p.resident_id, r.first_name, r.last_name, r.barangay, p.last_menstrual_period as lmp, p.expected_delivery_date as edc, p.pregnancy_status as status, p.high_risk, r.blood_type
+                FROM pregnancies p
+                LEFT JOIN residents r ON p.resident_id = r.id
+                ORDER BY p.last_menstrual_period DESC LIMIT 100
+            ");
+            $dbMaternalCases = $mtlStmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {}
+
+        // Immunization/Vaccination Records
+        try {
+            $vccStmt = $pdo->query("
+                SELECT v.id, v.resident_id, r.first_name, r.last_name, r.barangay, vac.vaccine_name, v.vaccination_date, 'Completed' as status
+                FROM vaccination_records v
+                LEFT JOIN residents r ON v.resident_id = r.id
+                LEFT JOIN immunization_schedules vac ON v.vaccine_id = vac.id
+                ORDER BY v.vaccination_date DESC LIMIT 100
+            ");
+            $dbVaccinationRecords = $vccStmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) { error_log('Admin vaccinations: ' . $e->getMessage()); }
+
+        // Disease Surveillance Cases
+        try {
+            $dcsStmt = $pdo->query("
+                SELECT dc.id, dc.disease_id, dt.disease_name, dc.resident_id, r.first_name, r.last_name, r.barangay, dc.case_date, dc.case_classification as status, dc.outcome
+                FROM disease_cases dc
+                LEFT JOIN disease_types dt ON dc.disease_id = dt.id
+                LEFT JOIN residents r ON dc.resident_id = r.id
+                ORDER BY dc.case_date DESC LIMIT 100
+            ");
+            $dbDiseaseCases = $dcsStmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) { error_log('Admin disease cases: ' . $e->getMessage()); }
+
+        // Medicine Inventory
+        try {
+            $medStmt = $pdo->query("
+                SELECT id, generic_name, brand_name, quantity_in_stock as quantity, reorder_level, unit_cost as unit_price, expiry_date, batch_number,
+                       CASE
+                           WHEN quantity_in_stock <= reorder_level THEN 'critical'
+                           WHEN quantity_in_stock <= (reorder_level * 1.5) THEN 'low'
+                           ELSE 'adequate'
+                       END as status
+                FROM medicine_inventory
+                ORDER BY quantity_in_stock ASC LIMIT 100
+            ");
+            $dbMedicineInventory = $medStmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {}
+
+        // Vital Statistics (Births & Deaths)
+        try {
+            $vitalStmt = $pdo->query("
+                SELECT id, 'Birth' as type, child_name, place_of_birth as location, date_of_birth as date_recorded
+                FROM vital_statistics_births
+                UNION ALL
+                SELECT id, 'Death' as type, deceased_name, place_of_death, date_of_death
+                FROM vital_statistics_deaths
+                ORDER BY date_recorded DESC LIMIT 100
+            ");
+            $dbVitalStatistics = $vitalStmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {}
+
+        // Statistics Summaries
+        try {
+            $consultationStats = $pdo->query("SELECT COUNT(*) as total FROM consultations")->fetchAll(PDO::FETCH_ASSOC);
+            $maternalStats = $pdo->query("SELECT pregnancy_status as status, COUNT(*) as count FROM pregnancies GROUP BY pregnancy_status")->fetchAll(PDO::FETCH_ASSOC);
+            $vaccinationStats = $pdo->query("SELECT COUNT(*) as count FROM vaccination_records")->fetchAll(PDO::FETCH_ASSOC);
+            $diseaseStats = $pdo->query("SELECT dt.disease_name, COUNT(*) as count FROM disease_cases dc LEFT JOIN disease_types dt ON dc.disease_id = dt.id GROUP BY dt.disease_name ORDER BY count DESC LIMIT 10")->fetchAll(PDO::FETCH_ASSOC);
+            $medicineStats = $pdo->query("SELECT CASE WHEN quantity_in_stock <= reorder_level THEN 'critical' WHEN quantity_in_stock <= (reorder_level*1.5) THEN 'low' ELSE 'adequate' END as status, COUNT(*) as count FROM medicine_inventory GROUP BY status")->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {}
+
+
 
         $pendingCertCount = (int)($pdo->query("SELECT COUNT(*) FROM health_certificates WHERE validity_status = 'Pending'")->fetchColumn() ?: 0);
         if ($pendingCertCount > 0) {
@@ -578,6 +861,17 @@ if (!empty($pdo)) {
                 $adminNotifications[] = ['id' => 'n2', 'msg' => "{$pendingMsgCount} unread resident message(s) received", 'type' => 'alert', 'time' => 'Action Needed', 'unread' => true];
             }
         } catch (Exception $e) {}
+
+        try {
+            $nStmt = $pdo->prepare(
+                "SELECT id, message AS msg, created_at AS time, (is_read = 0) AS unread
+                 FROM portal_notifications
+                 WHERE user_id = :user_id OR audience_role IN ('RHU_ADMIN', 'SUPER_ADMIN', 'ADMIN_STAFF')
+                 ORDER BY created_at DESC LIMIT 20"
+            );
+            $nStmt->execute(['user_id' => (int)($_SESSION['user']['user_id'] ?? 0)]);
+            $adminNotifications = array_merge($nStmt->fetchAll(PDO::FETCH_ASSOC) ?: [], $adminNotifications);
+        } catch (Exception $e) { error_log('Admin notifications: ' . $e->getMessage()); }
 
         $adminNotifications[] = ['id' => 'n4', 'msg' => 'System connected to MySQL rhu database.', 'type' => 'check', 'time' => 'Active', 'unread' => false];
 
@@ -608,6 +902,14 @@ $tabIconMap = [
     'audit' => 'database',
     'system' => 'settings',
     'security' => 'lock',
+];
+
+$drawerGroups = [
+    'Dashboard' => ['overview'],
+    'People & Accounts' => ['users', 'staff', 'residents'],
+    'Clinical Services' => ['consultations', 'maternal', 'vaccination', 'disease'],
+    'Records & Resources' => ['medicine', 'vital'],
+    'Governance' => ['reports', 'audit', 'system', 'security'],
 ];
 
 function tabUrl(string $tab, bool $notifs = false, array $extra = []): string
@@ -642,15 +944,145 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RHU Admin Dashboard - ResiHUnity RHU</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        html { scroll-behavior: smooth; }
+        body { overflow-x: hidden; }
+
+        .dashboard-header {
+            transition: box-shadow .28s ease, transform .28s ease;
+            will-change: box-shadow;
+        }
+        .dashboard-header.is-scrolled {
+            box-shadow: 0 16px 35px -22px rgba(15, 23, 42, .75);
+        }
+        .feature-drawer-backdrop {
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity .28s ease;
+        }
+        .feature-drawer-backdrop.is-open {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .feature-drawer {
+            transform: translateX(-102%);
+            transition: transform .34s cubic-bezier(.2, .75, .25, 1);
+            will-change: transform;
+        }
+        .feature-drawer.is-open {
+            transform: translateX(0);
+        }
+        .feature-drawer a svg {
+            transition: transform .2s ease;
+        }
+        .feature-drawer a:hover svg {
+            transform: scale(1.08);
+        }
+        body.drawer-open {
+            overflow: hidden;
+        }
+
+        main > div,
+        main > section,
+        main .bg-white.rounded-xl,
+        main .bg-white.rounded-2xl,
+        main details {
+            transition: transform .24s ease, box-shadow .24s ease, opacity .24s ease;
+        }
+        main .bg-white.rounded-xl:hover,
+        main .bg-white.rounded-2xl:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 14px 32px -24px rgba(15, 23, 42, .55);
+        }
+
+        [data-scroll-reveal] {
+            opacity: 0;
+            transform: translateY(18px) scale(.992);
+            transition:
+                opacity .58s cubic-bezier(.2, .75, .25, 1),
+                transform .58s cubic-bezier(.2, .75, .25, 1);
+            transition-delay: var(--reveal-delay, 0ms);
+        }
+        [data-scroll-reveal].is-visible {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+
+        table tbody tr {
+            transition: transform .18s ease, box-shadow .18s ease;
+        }
+        table tbody tr:not([hidden]):hover {
+            position: relative;
+            z-index: 1;
+            transform: translateX(3px);
+            box-shadow: -4px 0 0 currentColor;
+        }
+
+        button, a, input, select, textarea, summary {
+            transition:
+                transform .18s ease,
+                box-shadow .18s ease,
+                opacity .18s ease,
+                border-color .18s ease;
+        }
+        button:not(:disabled):active,
+        a:active {
+            transform: scale(.97);
+        }
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(15, 23, 42, .09);
+        }
+        details[open] > summary {
+            margin-bottom: .65rem;
+        }
+        details > summary::marker {
+            transition: transform .2s ease;
+        }
+
+        .metric-value-pop {
+            animation: metricPop .52s cubic-bezier(.2, .75, .25, 1) both;
+        }
+        @keyframes metricPop {
+            from { opacity: 0; transform: translateY(7px) scale(.94); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .scroll-top-button {
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(12px) scale(.92);
+            transition: opacity .22s ease, transform .22s ease;
+        }
+        .scroll-top-button.is-visible {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateY(0) scale(1);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            html { scroll-behavior: auto; }
+            *, *::before, *::after {
+                animation-duration: .01ms !important;
+                animation-iteration-count: 1 !important;
+                scroll-behavior: auto !important;
+                transition-duration: .01ms !important;
+            }
+            [data-scroll-reveal] { opacity: 1; transform: none; }
+        }
+    </style>
 </head>
 
 <body class="min-h-screen bg-gray-50 text-gray-900">
     <div class="min-h-screen flex flex-col">
         <!-- HEADER -->
-        <header class="bg-gradient-to-r from-slate-800 to-purple-900 text-white shadow-xl sticky top-0 z-40">
+        <header class="dashboard-header bg-gradient-to-r from-slate-800 to-purple-900 text-white shadow-xl sticky top-0 z-40">
             <div class="px-4 sm:px-6 py-3">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                     <div class="flex items-center gap-3">
+                        <button type="button" data-drawer-open class="flex h-9 w-9 items-center justify-center rounded-xl border border-white/20 bg-white/10 hover:bg-white/20" aria-label="Open feature drawer" aria-controls="feature-drawer" aria-expanded="false">
+                            <?php echo iconSvg('menu', 'w-5 h-5'); ?>
+                        </button>
                         <div class="w-9 h-9 bg-purple-700 rounded-xl flex items-center justify-center">
                             <?php echo iconSvg('shield', 'w-5 h-5 text-purple-200'); ?>
                         </div>
@@ -674,7 +1106,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                                 <div class="absolute right-0 top-10 w-80 max-w-[90vw] bg-white rounded-xl shadow-2xl border border-gray-100 z-50">
                                     <div class="p-3 border-b border-gray-100 flex items-center justify-between">
                                         <p class="font-bold text-gray-900 text-sm">System Notifications</p>
-                                        <span class="text-xs text-purple-600 font-semibold"><?php echo count($adminNotifications); ?> alerts</span>
+                                        <form method="post" class="flex items-center gap-2"><input type="hidden" name="action" value="mark_notifications_read"><span class="text-xs text-purple-600 font-semibold"><?php echo count($adminNotifications); ?> alerts</span><button class="text-[10px] font-bold text-gray-500">Mark read</button></form>
                                     </div>
                                     <div class="max-h-72 overflow-y-auto divide-y divide-gray-50">
                                         <?php foreach ($adminNotifications as $notif): ?>
@@ -704,28 +1136,49 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                                 <p class="text-[10px] text-purple-200 leading-none mt-0.5"><?php echo esc($currentAdminCode); ?></p>
                             </div>
                         </div>
-                        <a href="LandingPage.php" class="p-2 rounded-lg hover:bg-white/10" aria-label="Exit">
+                        <a href="RHUAdminDashboard.php?logout=1" class="p-2 rounded-lg hover:bg-white/10" aria-label="Sign out">
                             <?php echo iconSvg('logout', 'w-4 h-4'); ?>
                         </a>
                     </div>
                 </div>
             </div>
 
-            <!-- DESKTOP TABS -->
-            <div class="hidden sm:flex px-4 gap-1 overflow-x-auto pb-0.5">
-                <?php foreach ($tabLabelMap as $key => $label): ?>
-                    <?php $active = $tab === $key;
-                    $icon = $tabIconMap[$key]; ?>
-                    <a href="<?php echo esc(tabUrl($key)); ?>" class="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-t-lg transition-all whitespace-nowrap flex-shrink-0 <?php echo $active ? 'bg-white text-purple-800' : 'text-purple-200 hover:bg-white/10'; ?>">
-                        <?php echo iconSvg($icon, 'w-3.5 h-3.5'); ?>
-                        <?php echo esc($label); ?>
-                    </a>
-                <?php endforeach; ?>
-            </div>
         </header>
 
+        <div data-drawer-backdrop class="feature-drawer-backdrop fixed inset-0 z-50 bg-slate-950/40" aria-hidden="true"></div>
+        <aside id="feature-drawer" data-feature-drawer class="feature-drawer fixed inset-y-0 left-0 z-[60] flex w-[88vw] max-w-sm flex-col border-r border-gray-200 bg-white shadow-2xl" aria-label="RHU Admin features" aria-hidden="true">
+            <div class="flex items-center justify-between border-b border-gray-100 p-4">
+                <div class="flex items-center gap-3">
+                    <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-700 text-white"><?php echo iconSvg('shield', 'w-5 h-5'); ?></span>
+                    <div><p class="font-bold text-gray-900">Admin Features</p><p class="text-xs text-gray-500"><?php echo esc($tabLabelMap[$tab] ?? 'Dashboard'); ?></p></div>
+                </div>
+                <button type="button" data-drawer-close class="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 text-gray-600 hover:shadow-sm" aria-label="Close feature drawer"><?php echo iconSvg('close', 'w-5 h-5'); ?></button>
+            </div>
+            <nav class="flex-1 overflow-y-auto p-3">
+                <?php foreach ($drawerGroups as $groupLabel => $groupTabs): ?>
+                    <section class="mb-4">
+                        <h2 class="mb-1.5 px-3 text-[10px] font-black uppercase tracking-[0.16em] text-gray-400"><?php echo esc($groupLabel); ?></h2>
+                        <div class="space-y-1">
+                            <?php foreach ($groupTabs as $key): ?>
+                                <?php $active = $tab === $key; ?>
+                                <a href="<?php echo esc(tabUrl($key)); ?>" class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold <?php echo $active ? 'bg-purple-100 text-purple-900 shadow-sm' : 'text-gray-700 hover:bg-gray-50'; ?>" <?php echo $active ? 'aria-current="page"' : ''; ?>>
+                                    <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg <?php echo $active ? 'bg-purple-700 text-white' : 'bg-gray-100 text-gray-600'; ?>"><?php echo iconSvg($tabIconMap[$key], 'w-4 h-4'); ?></span>
+                                    <span class="flex-1"><?php echo esc($tabLabelMap[$key]); ?></span>
+                                    <?php if ($active): ?><span aria-hidden="true"><?php echo iconSvg('right', 'w-3.5 h-3.5'); ?></span><?php endif; ?>
+                                </a>
+                            <?php endforeach; ?>
+                        </div>
+                    </section>
+                <?php endforeach; ?>
+            </nav>
+            <div class="border-t border-gray-100 p-3">
+                <a href="RHUDashboard.php" class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50"><span class="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100"><?php echo iconSvg('stethoscope', 'w-4 h-4'); ?></span>Clinical Dashboard</a>
+                <a href="RHUAdminDashboard.php?logout=1" class="mt-1 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50"><span class="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100"><?php echo iconSvg('logout', 'w-4 h-4'); ?></span>Sign Out</a>
+            </div>
+        </aside>
+
         <!-- MAIN CONTENT AREA -->
-        <main class="flex-1 max-w-7xl mx-auto w-full px-3 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-5 pb-28 sm:pb-6">
+        <main class="flex-1 max-w-7xl mx-auto w-full px-3 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-5 pb-6">
             <?php if ($flashSuccess): ?>
                 <div class="rounded-xl border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800 flex items-center justify-between shadow-sm">
                     <span>✓ <?php echo esc($flashSuccess); ?></span>
@@ -747,6 +1200,15 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                         <?php renderMetricCard('Registered Residents', $totalResidentsCount, 'Barangay Registry', 'check', 'bg-blue-600', 'text-blue-600'); ?>
                         <?php renderMetricCard('Active Healthcare Staff', $totalStaffCount, 'Plantilla & Contractual', 'stethoscope', 'bg-emerald-600', 'text-emerald-600'); ?>
                         <?php renderMetricCard('Barangay Health Workers', $totalBhwCount, 'Assigned BHWs', 'users', 'bg-teal-600', 'text-teal-600'); ?>
+                    </div>
+
+                    <!-- CLINICAL SUMMARY CARDS -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                        <?php renderMetricCard('OPD Consultations', count($dbConsultationsList), 'View All', 'activity', 'bg-blue-600', 'text-blue-600'); ?>
+                        <?php renderMetricCard('Maternal Cases', count($dbMaternalCases), 'Active Pregnancies', 'baby', 'bg-pink-600', 'text-pink-600'); ?>
+                        <?php renderMetricCard('Immunizations', count($dbVaccinationRecords), 'Vaccination Records', 'shield', 'bg-emerald-600', 'text-emerald-600'); ?>
+                        <?php renderMetricCard('Disease Cases', count($dbDiseaseCases), 'Active Surveillance', 'alert', 'bg-red-600', 'text-red-600'); ?>
+                        <?php renderMetricCard('Medicine Items', count($dbMedicineInventory), 'Inventory Stock', 'pill', 'bg-orange-600', 'text-orange-600'); ?>
                     </div>
 
                     <!-- PENDING CERTIFICATE REQUESTS PANEL -->
@@ -804,7 +1266,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                                                             </form>
                                                         </div>
                                                     <?php else: ?>
-                                                        <span class="text-[11px] text-gray-400 font-mono"><?php echo esc($cert['certificate_number'] ?? 'Processed'); ?></span>
+                                                        <a href="?certificate_pdf=<?php echo (int)$cert['id']; ?>" class="text-[11px] font-bold text-purple-700">Download PDF</a>
                                                     <?php endif; ?>
                                                 </td>
                                             </tr>
@@ -858,6 +1320,63 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                 </div>
             <?php endif; ?>
 
+            <?php if ($tab === 'overview'): ?>
+                    <div class="bg-white rounded-xl p-4 sm:p-5 shadow-sm border border-gray-100">
+                        <div class="flex items-center justify-between mb-4">
+                            <div>
+                                <h3 class="font-bold text-gray-900 text-base">Event Registrations</h3>
+                                <p class="text-xs text-gray-500">Resident registrations for database-backed RHU events</p>
+                            </div>
+                            <span class="text-xs font-bold bg-indigo-100 text-indigo-800 px-3 py-1 rounded-full"><?php echo count($dbEventsList); ?> Registrations</span>
+                        </div>
+                        <?php if (!$dbEventsList): ?>
+                            <p class="text-xs text-gray-400 italic">No event registrations found.</p>
+                        <?php else: ?>
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-xs">
+                                    <thead><tr class="text-left text-gray-500"><th class="p-2">Resident</th><th class="p-2">Event</th><th class="p-2">Date</th><th class="p-2">Status</th><th class="p-2">Action</th></tr></thead>
+                                    <tbody>
+                                    <?php foreach ($dbEventsList as $eventRegistration): ?>
+                                        <tr class="border-t">
+                                            <td class="p-2 font-semibold"><?php echo esc(trim(($eventRegistration['first_name'] ?? '') . ' ' . ($eventRegistration['last_name'] ?? ''))); ?></td>
+                                            <td class="p-2"><?php echo esc($eventRegistration['event_title']); ?></td>
+                                            <td class="p-2"><?php echo esc($eventRegistration['event_date']); ?></td>
+                                            <td class="p-2"><?php echo esc($eventRegistration['status']); ?></td>
+                                            <td class="p-2">
+                                                <?php if ($eventRegistration['status'] === 'Pending'): ?>
+                                                <form method="post">
+                                                    <input type="hidden" name="action" value="confirm_event">
+                                                    <input type="hidden" name="event_id" value="<?php echo (int)$eventRegistration['id']; ?>">
+                                                    <button class="px-2 py-1 rounded bg-indigo-600 text-white font-bold">Confirm</button>
+                                                </form>
+                                                <?php endif; ?>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <?php endif; ?>
+                        <details class="mt-4 rounded border p-3"><summary class="cursor-pointer text-xs font-bold">Edit or cancel a published event</summary><div class="mt-3 space-y-2"><?php
+                            $publishedEvents = $pdo->query("SELECT id,title,scheduled_date,start_time,venue,description,capacity,status FROM portal_events ORDER BY scheduled_date DESC")->fetchAll(PDO::FETCH_ASSOC);
+                            foreach ($publishedEvents as $publishedEvent): ?>
+                            <form method="post" class="grid gap-1 border-t pt-2 text-xs sm:grid-cols-6">
+                                <input type="hidden" name="action" value="save_event"><input type="hidden" name="event_id" value="<?php echo (int)$publishedEvent['id']; ?>">
+                                <input name="title" value="<?php echo esc($publishedEvent['title']); ?>" class="rounded border p-1">
+                                <input type="date" name="scheduled_date" value="<?php echo esc($publishedEvent['scheduled_date']); ?>" class="rounded border p-1">
+                                <input type="time" name="start_time" value="<?php echo esc($publishedEvent['start_time']); ?>" class="rounded border p-1">
+                                <input name="venue" value="<?php echo esc($publishedEvent['venue']); ?>" class="rounded border p-1">
+                                <input name="description" value="<?php echo esc($publishedEvent['description']); ?>" class="rounded border p-1">
+                                <input type="number" name="capacity" value="<?php echo esc($publishedEvent['capacity']); ?>" class="rounded border p-1">
+                                <select name="status" class="rounded border p-1"><option>Scheduled</option><option>Cancelled</option><option>Completed</option></select>
+                                <button class="rounded bg-indigo-700 p-1 text-white">Save</button>
+                            </form>
+                            <form method="post" onsubmit="return confirm('Delete this event?')" class="mt-1"><input type="hidden" name="action" value="delete_event"><input type="hidden" name="event_id" value="<?php echo (int)$publishedEvent['id']; ?>"><button class="text-xs font-bold text-red-700">Delete <?php echo esc($publishedEvent['title']); ?></button></form>
+                            <?php endforeach; ?>
+                        </div></details>
+                    </div>
+            <?php endif; ?>
+
             <!-- USER MANAGEMENT TAB -->
             <?php if ($tab === 'users'): ?>
                 <div class="space-y-4 sm:space-y-5">
@@ -886,7 +1405,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                                             <td class="px-3 py-2.5 font-mono font-bold text-gray-500">#<?php echo $u['id']; ?></td>
                                             <td class="px-3 py-2.5 font-bold text-gray-900"><?php echo esc(trim(($u['first_name'] ?? '') . ' ' . ($u['last_name'] ?? ''))) ?: $u['username']; ?></td>
                                             <td class="px-3 py-2.5 text-gray-700 font-mono"><?php echo esc($u['email']); ?></td>
-                                            <td class="px-3 py-2.5"><span class="px-2 py-0.5 rounded-full font-bold bg-purple-100 text-purple-800"><?php echo esc($u['role_name'] ?? 'USER'); ?></span></td>
+                                            <td class="px-3 py-2.5"><form method="post" class="flex gap-1"><input type="hidden" name="action" value="update_user_role"><input type="hidden" name="user_id" value="<?php echo (int)$u['id']; ?>"><select name="role_id" class="rounded border p-1"><?php foreach ($dbRoles as $role): ?><option value="<?php echo (int)$role['id']; ?>" <?php echo ($u['role_name'] ?? '') === $role['name'] ? 'selected' : ''; ?>><?php echo esc($role['name']); ?></option><?php endforeach; ?></select><button class="rounded bg-purple-700 px-2 text-white">Set</button></form></td>
                                             <td class="px-3 py-2.5">
                                                 <?php if ($u['is_active']): ?>
                                                     <span class="px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-bold">Active</span>
@@ -923,6 +1442,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
 
             <!-- STAFF ACCOUNTS TAB -->
             <?php if ($tab === 'staff'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'staff'); ?>
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('stethoscope', 'w-5 h-5 text-emerald-600'); ?> Healthcare Staff Registry</h2>
@@ -1008,6 +1528,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
 
             <!-- RESIDENT REGISTRY TAB -->
             <?php if ($tab === 'residents'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'residents'); ?>
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('check', 'w-5 h-5 text-teal-600'); ?> Municipal Resident Registry</h2>
@@ -1027,6 +1548,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                                         <th class="px-3 py-2.5 text-left">PhilHealth ID</th>
                                         <th class="px-3 py-2.5 text-left">Email Address</th>
                                         <th class="px-3 py-2.5 text-left">Registered Date</th>
+                                        <th class="px-3 py-2.5 text-left">Action</th>
                                     </tr>
                                 </thead>
                                 <tbody class="divide-y divide-gray-100">
@@ -1040,6 +1562,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                                             <td class="px-3 py-2.5 font-mono text-gray-600"><?php echo esc($res['philhealth_id'] ?: 'N/A'); ?></td>
                                             <td class="px-3 py-2.5 text-gray-600 font-mono"><?php echo esc($res['email'] ?: 'N/A'); ?></td>
                                             <td class="px-3 py-2.5 text-gray-500"><?php echo esc(date('M d, Y', strtotime($res['created_at']))); ?></td>
+                                            <td class="px-3 py-2.5"><form method="post"><input type="hidden" name="action" value="update_resident_status"><input type="hidden" name="resident_id" value="<?php echo (int)$res['id']; ?>"><input type="hidden" name="new_status" value="<?php echo !empty($res['is_active']) ? 0 : 1; ?>"><button class="rounded px-2 py-1 font-bold <?php echo !empty($res['is_active']) ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800'; ?>"><?php echo !empty($res['is_active']) ? 'Deactivate' : 'Activate'; ?></button></form></td>
                                         </tr>
                                     <?php endforeach; ?>
                                 </tbody>
@@ -1049,7 +1572,287 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                 </div>
             <?php endif; ?>
 
+            <!-- OPD CONSULTATIONS TAB -->
+            <?php if ($tab === 'consultations'): ?>
+                <div class="space-y-4 sm:space-y-5">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('activity', 'w-5 h-5 text-blue-600'); ?> OPD Consultations</h2>
+                        <span class="text-xs bg-blue-100 text-blue-800 font-bold px-3 py-1 rounded-full">Total: <?php echo count($dbConsultationsList); ?> Consultations</span>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-xs min-w-[800px]">
+                                <thead class="bg-gray-50 text-gray-500 uppercase">
+                                    <tr>
+                                        <th class="px-3 py-2.5 text-left">Consultation ID</th>
+                                        <th class="px-3 py-2.5 text-left">Patient Name</th>
+                                        <th class="px-3 py-2.5 text-left">Barangay</th>
+                                        <th class="px-3 py-2.5 text-left">Chief Complaint</th>
+                                        <th class="px-3 py-2.5 text-left">Diagnosis</th>
+                                        <th class="px-3 py-2.5 text-left">Date</th>
+                                        <th class="px-3 py-2.5 text-left">Clinical Update</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-100">
+                                    <?php foreach ($dbConsultationsList as $csl): ?>
+                                        <tr class="hover:bg-gray-50">
+                                            <td class="px-3 py-2.5 font-mono font-bold text-gray-500">CSL-<?php echo $csl['id']; ?></td>
+                                            <td class="px-3 py-2.5 font-bold text-gray-900"><?php echo esc(($csl['first_name'] ?? '') . ' ' . ($csl['last_name'] ?? '')); ?></td>
+                                            <td class="px-3 py-2.5 text-purple-900"><?php echo esc($csl['barangay'] ?? 'N/A'); ?></td>
+                                            <td class="px-3 py-2.5 text-gray-700"><?php echo esc(substr($csl['chief_complaint'] ?? '', 0, 30)); ?></td>
+                                            <td class="px-3 py-2.5 text-gray-700"><?php echo esc($csl['diagnosis'] ?? 'N/A'); ?></td>
+                                            <td class="px-3 py-2.5 text-gray-500"><?php echo esc(date('M d, Y', strtotime($csl['consultation_date']))); ?></td>
+                                            <td class="px-3 py-2.5"><form method="post" class="flex min-w-[620px] gap-1"><input type="hidden" name="action" value="update_consultation"><input type="hidden" name="consultation_id" value="<?php echo (int)$csl['id']; ?>"><input name="diagnosis" value="<?php echo esc($csl['diagnosis'] ?? ''); ?>" placeholder="Diagnosis" class="w-28 rounded border p-1"><input name="treatment_plan" placeholder="Treatment plan" class="w-32 rounded border p-1"><input type="date" name="follow_up_date" class="rounded border p-1"><select name="physician_id" class="rounded border p-1"><?php foreach ($dbStaffList as $provider): ?><option value="<?php echo (int)$provider['id']; ?>" <?php echo (int)$csl['physician_id'] === (int)$provider['id'] ? 'selected' : ''; ?>><?php echo esc($provider['first_name'] . ' ' . $provider['last_name']); ?></option><?php endforeach; ?></select><select name="consultation_status" class="rounded border p-1"><option>Scheduled</option><option>In Progress</option><option>Completed</option><option>Cancelled</option><option>Referred</option></select><button class="rounded bg-blue-600 px-2 text-white">Save</button></form></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                            <?php if (empty($dbConsultationsList)): ?>
+                                <div class="p-4 text-center text-gray-500">No consultation records found.</div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <!-- MATERNAL HEALTH TAB -->
+            <?php if ($tab === 'maternal'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'maternal'); ?>
+                <div class="space-y-4 sm:space-y-5">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('baby', 'w-5 h-5 text-pink-600'); ?> Maternal Health Cases</h2>
+                        <span class="text-xs bg-pink-100 text-pink-800 font-bold px-3 py-1 rounded-full">Total: <?php echo count($dbMaternalCases); ?> Cases</span>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-xs min-w-[850px]">
+                                <thead class="bg-gray-50 text-gray-500 uppercase">
+                                    <tr>
+                                        <th class="px-3 py-2.5 text-left">Case ID</th>
+                                        <th class="px-3 py-2.5 text-left">Patient Name</th>
+                                        <th class="px-3 py-2.5 text-left">Barangay</th>
+                                        <th class="px-3 py-2.5 text-left">LMP</th>
+                                        <th class="px-3 py-2.5 text-left">EDC</th>
+                                        <th class="px-3 py-2.5 text-left">Blood Type</th>
+                                        <th class="px-3 py-2.5 text-left">Status</th>
+                                        <th class="px-3 py-2.5 text-left">Update</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-100">
+                                    <?php foreach ($dbMaternalCases as $mtl): ?>
+                                        <tr class="hover:bg-gray-50">
+                                            <td class="px-3 py-2.5 font-mono font-bold text-gray-500">MTL-<?php echo $mtl['id']; ?></td>
+                                            <td class="px-3 py-2.5 font-bold text-gray-900"><?php echo esc(($mtl['first_name'] ?? '') . ' ' . ($mtl['last_name'] ?? '')); ?></td>
+                                            <td class="px-3 py-2.5 text-purple-900"><?php echo esc($mtl['barangay'] ?? 'N/A'); ?></td>
+                                            <td class="px-3 py-2.5 text-gray-600"><?php echo esc(date('M d, Y', strtotime($mtl['lmp'] ?? 'now'))); ?></td>
+                                            <td class="px-3 py-2.5 text-gray-600"><?php echo esc(date('M d, Y', strtotime($mtl['edc'] ?? 'now'))); ?></td>
+                                            <td class="px-3 py-2.5 font-bold"><?php echo esc($mtl['blood_type'] ?? 'N/A'); ?></td>
+                                            <td class="px-3 py-2.5"><span class="px-2 py-0.5 rounded-full bg-pink-100 text-pink-800 font-bold"><?php echo esc($mtl['status'] ?? 'Active'); ?></span></td>
+                                            <td class="px-3 py-2.5"><form method="post" class="flex gap-1"><input type="hidden" name="action" value="update_pregnancy"><input type="hidden" name="pregnancy_id" value="<?php echo (int)$mtl['id']; ?>"><select name="status" class="rounded border p-1"><option>Active</option><option>Delivered</option><option>Completed</option><option>Referred</option></select><label class="flex items-center gap-1"><input type="checkbox" name="high_risk" <?php echo !empty($mtl['high_risk']) ? 'checked' : ''; ?>> High risk</label><button class="rounded bg-pink-600 px-2 text-white">Save</button></form></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                            <?php if (empty($dbMaternalCases)): ?>
+                                <div class="p-4 text-center text-gray-500">No maternal health cases found.</div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <!-- IMMUNIZATION TAB -->
+            <?php if ($tab === 'vaccination'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'vaccination'); ?>
+                <div class="space-y-4 sm:space-y-5">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('shield', 'w-5 h-5 text-emerald-600'); ?> Immunization Records</h2>
+                        <span class="text-xs bg-emerald-100 text-emerald-800 font-bold px-3 py-1 rounded-full">Total: <?php echo count($dbVaccinationRecords); ?> Records</span>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-xs min-w-[750px]">
+                                <thead class="bg-gray-50 text-gray-500 uppercase">
+                                    <tr>
+                                        <th class="px-3 py-2.5 text-left">Record ID</th>
+                                        <th class="px-3 py-2.5 text-left">Beneficiary</th>
+                                        <th class="px-3 py-2.5 text-left">Barangay</th>
+                                        <th class="px-3 py-2.5 text-left">Vaccine Name</th>
+                                        <th class="px-3 py-2.5 text-left">Vaccination Date</th>
+                                        <th class="px-3 py-2.5 text-left">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-100">
+                                    <?php foreach ($dbVaccinationRecords as $vcc): ?>
+                                        <tr class="hover:bg-gray-50">
+                                            <td class="px-3 py-2.5 font-mono font-bold text-gray-500">VCC-<?php echo $vcc['id']; ?></td>
+                                            <td class="px-3 py-2.5 font-bold text-gray-900"><?php echo esc(($vcc['first_name'] ?? '') . ' ' . ($vcc['last_name'] ?? '')); ?></td>
+                                            <td class="px-3 py-2.5 text-purple-900"><?php echo esc($vcc['barangay'] ?? 'N/A'); ?></td>
+                                            <td class="px-3 py-2.5 text-gray-700"><?php echo esc($vcc['vaccine_name'] ?? 'N/A'); ?></td>
+                                            <td class="px-3 py-2.5 text-gray-600"><?php echo esc(date('M d, Y', strtotime($vcc['vaccination_date']))); ?></td>
+                                            <td class="px-3 py-2.5"><span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold"><?php echo esc($vcc['status'] ?? 'Completed'); ?></span></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                            <?php if (empty($dbVaccinationRecords)): ?>
+                                <div class="p-4 text-center text-gray-500">No vaccination records found.</div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <!-- DISEASE SURVEILLANCE TAB -->
+            <?php if ($tab === 'disease'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'disease'); ?>
+                <div class="space-y-4 sm:space-y-5">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('alert', 'w-5 h-5 text-red-600'); ?> Disease Surveillance</h2>
+                        <span class="text-xs bg-red-100 text-red-800 font-bold px-3 py-1 rounded-full">Total: <?php echo count($dbDiseaseCases); ?> Cases</span>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-xs min-w-[800px]">
+                                <thead class="bg-gray-50 text-gray-500 uppercase">
+                                    <tr>
+                                        <th class="px-3 py-2.5 text-left">Case ID</th>
+                                        <th class="px-3 py-2.5 text-left">Disease</th>
+                                        <th class="px-3 py-2.5 text-left">Patient</th>
+                                        <th class="px-3 py-2.5 text-left">Barangay</th>
+                                        <th class="px-3 py-2.5 text-left">Case Date</th>
+                                        <th class="px-3 py-2.5 text-left">Classification</th>
+                                            <th class="px-3 py-2.5 text-left">Outcome</th>
+                                            <th class="px-3 py-2.5 text-left">Update</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-100">
+                                    <?php foreach ($dbDiseaseCases as $dcs): ?>
+                                        <tr class="hover:bg-gray-50">
+                                            <td class="px-3 py-2.5 font-mono font-bold text-gray-500">DCS-<?php echo $dcs['id']; ?></td>
+                                            <td class="px-3 py-2.5 font-bold text-red-700"><?php echo esc($dcs['disease_name'] ?? 'Unknown'); ?></td>
+                                            <td class="px-3 py-2.5 font-bold text-gray-900"><?php echo esc(($dcs['first_name'] ?? '') . ' ' . ($dcs['last_name'] ?? '')); ?></td>
+                                            <td class="px-3 py-2.5 text-purple-900"><?php echo esc($dcs['barangay'] ?? 'N/A'); ?></td>
+                                            <td class="px-3 py-2.5 text-gray-600"><?php echo esc(date('M d, Y', strtotime($dcs['case_date']))); ?></td>
+                                            <td class="px-3 py-2.5"><span class="px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-800 font-bold"><?php echo esc($dcs['status'] ?? 'Pending'); ?></span></td>
+                                            <td class="px-3 py-2.5"><span class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-800 font-bold"><?php echo esc($dcs['outcome'] ?? 'Pending'); ?></span></td>
+                                            <td class="px-3 py-2.5"><form method="post" class="flex min-w-[360px] gap-1"><input type="hidden" name="action" value="update_disease_case"><input type="hidden" name="case_id" value="<?php echo (int)$dcs['id']; ?>"><select name="classification" class="rounded border p-1"><option>Suspected</option><option>Probable</option><option>Confirmed</option></select><select name="outcome" class="rounded border p-1"><option>Active</option><option>Recovered</option><option>Referred</option><option>Died</option></select><label class="flex items-center gap-1"><input type="checkbox" name="reported_to_doh"> DOH</label><button class="rounded bg-red-600 px-2 text-white">Save</button></form></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                            <?php if (empty($dbDiseaseCases)): ?>
+                                <div class="p-4 text-center text-gray-500">No disease cases found.</div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <!-- MEDICINE INVENTORY TAB -->
+            <?php if ($tab === 'medicine'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'medicine'); ?>
+                <div class="space-y-4 sm:space-y-5">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('pill', 'w-5 h-5 text-orange-600'); ?> Medicine Inventory</h2>
+                        <span class="text-xs bg-orange-100 text-orange-800 font-bold px-3 py-1 rounded-full">Total Items: <?php echo count($dbMedicineInventory); ?></span>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-xs min-w-[900px]">
+                                <thead class="bg-gray-50 text-gray-500 uppercase">
+                                    <tr>
+                                        <th class="px-3 py-2.5 text-left">Item ID</th>
+                                        <th class="px-3 py-2.5 text-left">Generic Name</th>
+                                        <th class="px-3 py-2.5 text-left">Brand Name</th>
+                                        <th class="px-3 py-2.5 text-left">Quantity</th>
+                                        <th class="px-3 py-2.5 text-left">Reorder Level</th>
+                                        <th class="px-3 py-2.5 text-left">Unit Cost</th>
+                                        <th class="px-3 py-2.5 text-left">Batch No.</th>
+                                        <th class="px-3 py-2.5 text-left">Expiry Date</th>
+                                        <th class="px-3 py-2.5 text-left">Status</th>
+                                        <th class="px-3 py-2.5 text-left">Stock Adjustment</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-100">
+                                    <?php foreach ($dbMedicineInventory as $med): ?>
+                                        <tr class="hover:bg-gray-50">
+                                            <td class="px-3 py-2.5 font-mono font-bold text-gray-500">MED-<?php echo $med['id']; ?></td>
+                                            <td class="px-3 py-2.5 font-bold text-gray-900"><?php echo esc($med['generic_name'] ?? 'N/A'); ?></td>
+                                            <td class="px-3 py-2.5 text-gray-700"><?php echo esc($med['brand_name'] ?? 'N/A'); ?></td>
+                                            <td class="px-3 py-2.5 font-bold"><?php echo esc($med['quantity'] ?? 0); ?></td>
+                                            <td class="px-3 py-2.5 text-gray-600"><?php echo esc($med['reorder_level'] ?? 10); ?></td>
+                                            <td class="px-3 py-2.5 text-gray-600">₱<?php echo esc(number_format($med['unit_price'] ?? 0, 2)); ?></td>
+                                            <td class="px-3 py-2.5 font-mono text-gray-600"><?php echo esc($med['batch_number'] ?? 'N/A'); ?></td>
+                                            <td class="px-3 py-2.5 text-gray-600"><?php echo esc(date('M d, Y', strtotime($med['expiry_date']))); ?></td>
+                                            <td class="px-3 py-2.5">
+                                                <span class="px-2 py-0.5 rounded-full font-bold <?php
+                                                    if ($med['status'] === 'critical') echo 'bg-red-100 text-red-800';
+                                                    elseif ($med['status'] === 'low') echo 'bg-yellow-100 text-yellow-800';
+                                                    else echo 'bg-green-100 text-green-800';
+                                                ?>">
+                                                    <?php echo esc(ucfirst($med['status'] ?? 'adequate')); ?>
+                                                </span>
+                                            </td>
+                                            <td class="px-3 py-2.5"><form method="post" class="flex min-w-[280px] gap-1"><input type="hidden" name="action" value="adjust_medicine_stock"><input type="hidden" name="medicine_id" value="<?php echo (int)$med['id']; ?>"><input required type="number" name="quantity_change" placeholder="+/- qty" class="w-20 rounded border p-1"><input name="reason" placeholder="Reason" class="w-28 rounded border p-1"><button class="rounded bg-orange-600 px-2 text-white">Apply</button></form></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                            <?php if (empty($dbMedicineInventory)): ?>
+                                <div class="p-4 text-center text-gray-500">No medicine inventory records found.</div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <!-- VITAL STATISTICS TAB -->
+            <?php if ($tab === 'vital'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'vital'); ?>
+                <div class="space-y-4 sm:space-y-5">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('file', 'w-5 h-5 text-purple-600'); ?> Vital Statistics</h2>
+                        <span class="text-xs bg-purple-100 text-purple-800 font-bold px-3 py-1 rounded-full">Total: <?php echo count($dbVitalStatistics); ?> Records</span>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-xs min-w-[750px]">
+                                <thead class="bg-gray-50 text-gray-500 uppercase">
+                                    <tr>
+                                        <th class="px-3 py-2.5 text-left">Record ID</th>
+                                        <th class="px-3 py-2.5 text-left">Type</th>
+                                        <th class="px-3 py-2.5 text-left">Name</th>
+                                        <th class="px-3 py-2.5 text-left">Location</th>
+                                        <th class="px-3 py-2.5 text-left">Date</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-100">
+                                    <?php foreach ($dbVitalStatistics as $vital): ?>
+                                        <tr class="hover:bg-gray-50">
+                                            <td class="px-3 py-2.5 font-mono font-bold text-gray-500">VIT-<?php echo $vital['id']; ?></td>
+                                            <td class="px-3 py-2.5">
+                                                <span class="px-2 py-0.5 rounded-full font-bold <?php echo $vital['type'] === 'Birth' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'; ?>">
+                                                    <?php echo esc($vital['type']); ?>
+                                                </span>
+                                            </td>
+                                            <td class="px-3 py-2.5 font-bold text-gray-900"><?php echo esc($vital['child_name'] ?? $vital['deceased_name'] ?? 'N/A'); ?></td>
+                                            <td class="px-3 py-2.5 text-purple-900"><?php echo esc($vital['location'] ?? 'N/A'); ?></td>
+                                            <td class="px-3 py-2.5 text-gray-600"><?php echo esc(date('M d, Y', strtotime($vital['date_recorded']))); ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                            <?php if (empty($dbVitalStatistics)): ?>
+                                <div class="p-4 text-center text-gray-500">No vital statistics records found.</div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            <?php endif; ?>
+
             <!-- AUDIT LOGS TAB -->
+
             <?php if ($tab === 'audit'): ?>
                 <div class="space-y-4 sm:space-y-5">
                     <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('database', 'w-5 h-5 text-slate-600'); ?> System Audit Trail</h2>
@@ -1086,8 +1889,9 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
 
             <!-- REPORTS & ANALYTICS TAB -->
             <?php if ($tab === 'reports'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'reports'); ?>
                 <div class="space-y-4 sm:space-y-5">
-                    <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('bar', 'w-5 h-5 text-purple-600'); ?> Database Analytics & Reports</h2>
+                    <div class="flex items-center justify-between"><h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('bar', 'w-5 h-5 text-purple-600'); ?> Database Analytics & Reports</h2><a href="?tab=reports&amp;export=summary" class="rounded-lg bg-purple-700 px-4 py-2 text-xs font-bold text-white">Export CSV Summary</a></div>
                     <div class="grid md:grid-cols-2 gap-4">
                         <div class="bg-white rounded-xl p-4 sm:p-5 shadow-sm border border-gray-100 space-y-3">
                             <h3 class="font-bold text-gray-900 text-sm">Resident Distribution by Barangay</h3>
@@ -1114,6 +1918,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
 
             <!-- RE-DESIGNED SYSTEM SETTINGS TAB -->
             <?php if ($tab === 'system'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'system'); ?>
                 <div class="space-y-6">
                     <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-4">
                         <div>
@@ -1176,23 +1981,33 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                                 <div class="space-y-3 text-xs">
                                     <div class="flex justify-between py-2 border-b border-gray-100">
                                         <span class="text-gray-500 font-medium">SMTP Server Host</span>
-                                        <span class="font-mono font-bold text-gray-900">smtp.gmail.com:587 (TLS)</span>
+                                        <span class="font-mono font-bold text-gray-900"><?php echo esc(portalSetting($savedPortalSettings, 'smtp_host', 'Not configured') . ':' . portalSetting($savedPortalSettings, 'smtp_port', '587') . ' (' . strtoupper(portalSetting($savedPortalSettings, 'smtp_encryption', 'tls')) . ')'); ?></span>
                                     </div>
                                     <div class="flex justify-between py-2 border-b border-gray-100">
                                         <span class="text-gray-500 font-medium">Active Email Account</span>
-                                        <span class="font-mono font-bold text-purple-800">chedricbascoguin27@gmail.com</span>
+                                        <span class="font-mono font-bold text-purple-800"><?php echo esc(portalSetting($savedPortalSettings, 'smtp_user', 'Not configured')); ?></span>
                                     </div>
                                     <div class="flex justify-between py-2 border-b border-gray-100">
                                         <span class="text-gray-500 font-medium">Authentication Status</span>
-                                        <span class="px-2 py-0.5 rounded-full bg-green-100 text-green-800 font-bold">App Password Verified</span>
+                                        <span class="px-2 py-0.5 rounded-full <?php echo portalSetting($savedPortalSettings, 'smtp_user') ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'; ?> font-bold"><?php echo portalSetting($savedPortalSettings, 'smtp_user') ? 'Configured' : 'Environment fallback'; ?></span>
                                     </div>
                                 </div>
+
+                                <form method="post" class="grid grid-cols-2 gap-2 pt-2 text-xs">
+                                    <input type="hidden" name="action" value="update_smtp_settings">
+                                    <input name="smtp_host" value="<?php echo esc(portalSetting($savedPortalSettings, 'smtp_host')); ?>" placeholder="SMTP host" class="rounded border p-2">
+                                    <input type="number" name="smtp_port" value="<?php echo esc(portalSetting($savedPortalSettings, 'smtp_port', '587')); ?>" placeholder="Port" class="rounded border p-2">
+                                    <input type="email" name="smtp_user" value="<?php echo esc(portalSetting($savedPortalSettings, 'smtp_user')); ?>" placeholder="SMTP account" class="rounded border p-2">
+                                    <select name="smtp_encryption" class="rounded border p-2"><option value="tls">TLS</option><option value="ssl">SSL</option></select>
+                                    <label class="col-span-2 flex items-center gap-2"><input type="checkbox" name="two_factor_enabled" <?php echo portalSetting($savedPortalSettings, 'two_factor_enabled', '1') === '1' ? 'checked' : ''; ?>> Require admin 2FA</label>
+                                    <button class="col-span-2 rounded bg-slate-700 py-2 font-bold text-white">Save Mail &amp; 2FA Settings</button>
+                                </form>
 
                                 <form method="post" class="pt-2 space-y-3 text-xs">
                                     <input type="hidden" name="action" value="send_test_email">
                                     <label class="block font-bold text-gray-700">Dispatch Test Notification Email
                                         <div class="mt-1 flex gap-2">
-                                            <input required type="email" name="test_email" value="chedricbascoguin27@gmail.com" class="flex-1 p-2 rounded border border-gray-300">
+                                            <input required type="email" name="test_email" value="<?php echo esc($rhuProfile['email']); ?>" class="flex-1 p-2 rounded border border-gray-300">
                                             <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded font-bold hover:bg-blue-700 whitespace-nowrap">Send Test Email</button>
                                         </div>
                                     </label>
@@ -1208,7 +2023,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                                 <div class="grid grid-cols-2 gap-3 text-xs">
                                     <div class="p-3 bg-gray-50 rounded-xl border border-gray-100">
                                         <p class="text-gray-400">Database Name</p>
-                                        <p class="font-mono font-bold text-gray-900 mt-1">rhu</p>
+                                        <p class="font-mono font-bold text-gray-900 mt-1"><?php echo esc($databaseHealth['name']); ?></p>
                                     </div>
                                     <div class="p-3 bg-gray-50 rounded-xl border border-gray-100">
                                         <p class="text-gray-400">Connection Driver</p>
@@ -1222,9 +2037,31 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                                         <p class="text-gray-400">Total System Users</p>
                                         <p class="font-mono font-bold text-purple-900 mt-1"><?php echo $totalUsersCount; ?> Accounts</p>
                                     </div>
+                                    <div class="p-3 bg-gray-50 rounded-xl border border-gray-100">
+                                        <p class="text-gray-400">Database Server</p>
+                                        <p class="font-mono font-bold text-gray-900 mt-1"><?php echo esc($databaseHealth['version']); ?></p>
+                                    </div>
+                                    <div class="p-3 bg-gray-50 rounded-xl border border-gray-100">
+                                        <p class="text-gray-400">Schema Tables</p>
+                                        <p class="font-mono font-bold text-gray-900 mt-1"><?php echo (int)$databaseHealth['tables']; ?> tables</p>
+                                    </div>
                                 </div>
                             </div>
                         </div>
+                    </div>
+
+                    <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
+                        <h3 class="mb-3 font-bold text-gray-900">Publish RHU Event</h3>
+                        <form method="post" class="grid gap-2 text-xs sm:grid-cols-3">
+                            <input type="hidden" name="action" value="create_event">
+                            <input required name="title" placeholder="Event title" class="rounded border p-2">
+                            <input required type="date" name="scheduled_date" class="rounded border p-2">
+                            <input type="time" name="start_time" class="rounded border p-2">
+                            <input required name="venue" placeholder="Venue" class="rounded border p-2">
+                            <input type="number" min="1" name="capacity" placeholder="Capacity" class="rounded border p-2">
+                            <input name="description" placeholder="Description" class="rounded border p-2">
+                            <button class="sm:col-span-3 rounded bg-indigo-700 py-2 font-bold text-white">Publish Event to Residents</button>
+                        </form>
                     </div>
                 </div>
             <?php endif; ?>
@@ -1560,6 +2397,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
 
             <!-- RE-DESIGNED SECURITY TAB -->
             <?php if ($tab === 'security'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'security'); ?>
                 <div class="space-y-6">
                     <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-4">
                         <div>
@@ -1607,13 +2445,13 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                                     <div class="p-4 bg-purple-50 rounded-xl border border-purple-200">
                                         <div class="flex items-center justify-between">
                                             <span class="font-bold text-purple-900">2FA Enforcement</span>
-                                            <span class="px-2.5 py-1 bg-purple-700 text-white font-bold rounded-full text-[10px]">STRICTLY ACTIVE</span>
+                                            <span class="px-2.5 py-1 bg-purple-700 text-white font-bold rounded-full text-[10px]"><?php echo portalSetting($savedPortalSettings, 'two_factor_enabled', '1') === '1' ? 'ACTIVE' : 'DISABLED'; ?></span>
                                         </div>
                                         <p class="text-purple-800 mt-2">All login attempts require a unique 6-digit OTP code sent directly to your email address.</p>
                                     </div>
                                     <div class="flex justify-between py-2 border-b border-gray-100">
                                         <span class="text-gray-500 font-medium">Registered 2FA Email</span>
-                                        <span class="font-mono font-bold text-gray-900">chedricbascoguinchedric20@gmail.com</span>
+                                        <span class="font-mono font-bold text-gray-900"><?php echo esc($_SESSION['user']['email'] ?? 'Not available'); ?></span>
                                     </div>
                                     <div class="flex justify-between py-2 border-b border-gray-100">
                                         <span class="text-gray-500 font-medium">Code Validity Window</span>
@@ -1682,6 +2520,112 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
             <?php endif; ?>
         </main>
     </div>
+<button type="button" class="scroll-top-button fixed bottom-20 right-4 z-30 flex h-11 w-11 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-700 shadow-xl sm:bottom-6 sm:right-6" aria-label="Back to top" title="Back to top">
+    <span aria-hidden="true">↑</span>
+</button>
+<script>
+document.querySelectorAll('form[method="post"], form[method="POST"]').forEach((form) => {
+    if (form.querySelector('input[name="csrf_token"]')) return;
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'csrf_token';
+    input.value = <?php echo json_encode(portalCsrfToken(), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+    form.prepend(input);
+});
+
+const featureDrawer = document.querySelector('[data-feature-drawer]');
+const drawerBackdrop = document.querySelector('[data-drawer-backdrop]');
+const drawerOpenButton = document.querySelector('[data-drawer-open]');
+const drawerCloseButton = document.querySelector('[data-drawer-close]');
+let drawerReturnFocus = null;
+const setDrawerOpen = (open) => {
+    featureDrawer?.classList.toggle('is-open', open);
+    drawerBackdrop?.classList.toggle('is-open', open);
+    document.body.classList.toggle('drawer-open', open);
+    featureDrawer?.setAttribute('aria-hidden', String(!open));
+    drawerBackdrop?.setAttribute('aria-hidden', String(!open));
+    drawerOpenButton?.setAttribute('aria-expanded', String(open));
+    if (open) {
+        drawerReturnFocus = document.activeElement;
+        window.setTimeout(() => drawerCloseButton?.focus(), 120);
+    } else if (drawerReturnFocus instanceof HTMLElement) {
+        drawerReturnFocus.focus();
+    }
+};
+drawerOpenButton?.addEventListener('click', () => setDrawerOpen(true));
+drawerCloseButton?.addEventListener('click', () => setDrawerOpen(false));
+drawerBackdrop?.addEventListener('click', () => setDrawerOpen(false));
+document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && featureDrawer?.classList.contains('is-open')) setDrawerOpen(false);
+});
+
+document.querySelectorAll('table').forEach((table, tableIndex) => {
+    const body = table.tBodies[0];
+    if (!body || body.rows.length < 5) return;
+    const rows = Array.from(body.rows);
+    const pageSize = 15;
+    let page = 1;
+    let query = '';
+    const toolbar = document.createElement('div');
+    toolbar.className = 'flex items-center justify-between gap-2 border-b bg-gray-50 p-2 text-xs';
+    toolbar.innerHTML = `<input aria-label="Search table" class="w-full max-w-xs rounded border p-2" placeholder="Search these records…"><span class="whitespace-nowrap"></span><div class="flex gap-1"><button type="button" class="rounded border bg-white px-2 py-1">Previous</button><button type="button" class="rounded border bg-white px-2 py-1">Next</button></div>`;
+    table.parentElement.insertBefore(toolbar, table);
+    const input = toolbar.querySelector('input');
+    const status = toolbar.querySelector('span');
+    const [previous, next] = toolbar.querySelectorAll('button');
+    const render = () => {
+        const matching = rows.filter(row => row.textContent.toLowerCase().includes(query));
+        const pages = Math.max(1, Math.ceil(matching.length / pageSize));
+        page = Math.min(page, pages);
+        rows.forEach(row => row.hidden = true);
+        matching.slice((page - 1) * pageSize, page * pageSize).forEach(row => row.hidden = false);
+        status.textContent = `${matching.length} records · Page ${page}/${pages}`;
+        previous.disabled = page <= 1;
+        next.disabled = page >= pages;
+    };
+    input.addEventListener('input', () => { query = input.value.trim().toLowerCase(); page = 1; render(); });
+    previous.addEventListener('click', () => { page--; render(); });
+    next.addEventListener('click', () => { page++; render(); });
+    render();
+});
+
+const dashboardHeader = document.querySelector('.dashboard-header');
+const scrollTopButton = document.querySelector('.scroll-top-button');
+const updateScrollEffects = () => {
+    const scrolled = window.scrollY > 18;
+    dashboardHeader?.classList.toggle('is-scrolled', scrolled);
+    scrollTopButton?.classList.toggle('is-visible', window.scrollY > 420);
+};
+window.addEventListener('scroll', updateScrollEffects, { passive: true });
+updateScrollEffects();
+scrollTopButton?.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+
+const revealTargets = new Set([
+    ...document.querySelectorAll('main > div > div, main > div > section, main .grid > .bg-white, main details')
+]);
+revealTargets.forEach((element, index) => {
+    element.dataset.scrollReveal = '';
+    element.style.setProperty('--reveal-delay', `${Math.min(index % 5, 4) * 55}ms`);
+});
+
+if ('IntersectionObserver' in window && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const revealObserver = new IntersectionObserver((entries, observer) => {
+        entries.forEach(entry => {
+            if (!entry.isIntersecting) return;
+            entry.target.classList.add('is-visible');
+            observer.unobserve(entry.target);
+        });
+    }, { threshold: 0.08, rootMargin: '0px 0px -36px 0px' });
+    revealTargets.forEach(element => revealObserver.observe(element));
+} else {
+    revealTargets.forEach(element => element.classList.add('is-visible'));
+}
+
+document.querySelectorAll('main .text-2xl.font-black').forEach((value, index) => {
+    value.classList.add('metric-value-pop');
+    value.style.animationDelay = `${Math.min(index, 8) * 45}ms`;
+});
+</script>
 </body>
 
 </html>
