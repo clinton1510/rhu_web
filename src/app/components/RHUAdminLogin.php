@@ -36,6 +36,11 @@ $step = $_GET['step'] ?? 'credentials';
 $error = '';
 $infoMsg = '';
 
+// DEBUG: Temporary output
+if (empty($_POST)) {
+  error_log('RHUAdminLogin DEBUG: pdo=' . ($pdo ? 'connected' : 'null') . ', activeAdmin=' . ($activeAdmin ? 'found' : 'null'));
+}
+
 if (!empty($_SESSION['admin_login_flash'])) {
   $infoMsg = $_SESSION['admin_login_flash'];
   unset($_SESSION['admin_login_flash']);
@@ -122,6 +127,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       } elseif (!password_verify($password, $activeAdmin['password_hash'])) {
         $error = 'Incorrect password for the System Administrator account.';
       } else {
+        $loginSettings = portalSettings($pdo);
+        if (portalSetting($loginSettings, 'two_factor_enabled', '1') !== '1') {
+          session_regenerate_id(true);
+          $_SESSION['rhu_admin_authenticated'] = true;
+          $_SESSION['user'] = $activeAdmin;
+          $upd = $pdo->prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = :id');
+          $upd->execute(['id' => $activeAdmin['user_id']]);
+          portalAudit($pdo, (int)$activeAdmin['user_id'], 'RHU Admin Login', 'users', (int)$activeAdmin['user_id']);
+          header('Location: RHUAdminDashboard.php');
+          exit;
+        }
         // Valid Unique Admin Credentials
         $_SESSION['pending_admin_user'] = $activeAdmin;
         $_SESSION['rhu_admin_email'] = $activeAdmin['email'];
@@ -157,6 +173,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       $step = 'mfa';
     } else {
       $user = $_SESSION['pending_admin_user'] ?? null;
+      session_regenerate_id(true);
       $_SESSION['rhu_admin_authenticated'] = true;
       if ($user) {
         $_SESSION['user'] = $user;
