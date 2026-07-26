@@ -2,7 +2,12 @@
 if (session_status() === PHP_SESSION_NONE) session_start();
 require_once __DIR__ . '/portal.php';
 
-$showPassword = isset($_POST['toggle_password_bhw']) ? ($_SESSION['bhw_show_password'] = !($_SESSION['bhw_show_password'] ?? false)) : ($_SESSION['bhw_show_password'] ?? false);
+if (!function_exists('e')) {
+    function e(mixed $v): string {
+        return htmlspecialchars((string)($v ?? ''), ENT_QUOTES, 'UTF-8');
+    }
+}
+
 $email = trim($_POST['email'] ?? '');
 $password = $_POST['password'] ?? '';
 $barangay = trim($_POST['barangay'] ?? '');
@@ -11,7 +16,7 @@ $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login_bhw'])) {
     if (empty($barangay) || empty($certNumber) || empty($email) || empty($password)) {
-        $error = 'Please fill in all required fields';
+        $error = 'Please fill in all required fields (Barangay, Cert #, Email, Password)';
     } elseif (empty($pdo)) {
         $error = 'The database is unavailable. Please try again later.';
     } else {
@@ -26,7 +31,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login_bhw'])) {
             );
             $statement->execute(['email' => $email, 'barangay' => $barangay, 'certificate' => $certNumber]);
             $bhw = $statement->fetch();
-            if (!$bhw || !password_verify($password, $bhw['password_hash'])) $error = 'Invalid BHW credentials, barangay, or certificate number.';
+            if (!$bhw || !password_verify($password, $bhw['password_hash'])) $error = 'Invalid BHW credentials, assigned barangay, or certification number.';
             if ($bhw && !$error) {
                 $_SESSION['bhw_user'] = ['id' => (int)$bhw['user_id'], 'staff_id' => (int)$bhw['staff_id'], 'bhw_id' => (int)$bhw['bhw_id'], 'email' => $bhw['email'], 'barangay' => $bhw['barangay'], 'name' => trim($bhw['first_name'] . ' ' . $bhw['last_name'])];
                 portalAudit($pdo, (int)$bhw['user_id'], 'BHW login', 'staff', (int)$bhw['staff_id']);
@@ -48,139 +53,190 @@ if (!empty($pdo)) {
         error_log('BHW login barangays: ' . $exception->getMessage());
     }
 }
-
-define('RECAPTCHA_SITE_KEY', 'YOUR_RECAPTCHA_SITE_KEY');
+if (empty($barangays)) {
+    $barangays = ['Aga','Balaytigue','Banilad','Barangay 1 (Pob.)','Barangay 2 (Pob.)','Barangay 3 (Pob.)','Barangay 4 (Pob.)','Bilaran','Bucana','Bulihan','Calayo','Catandaan','Dayap','Kaylaway','Looc','Lumbangan','Natipuan','Pantalan','Wawa'];
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BHW Login - RedPulse RHU</title>
+    <title>Barangay Health Worker Portal | ResiHUnity RHU</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+            }
+          }
+        }
+      }
+    </script>
 </head>
-<body class="bg-gradient-to-br from-green-50 via-white to-emerald-50">
-    <div class="min-h-screen flex items-center justify-center px-4 py-8">
-        <div class="max-w-md w-full">
-            <!-- Header -->
-            <div class="text-center mb-8">
-                <a href="LandingPage.php" class="inline-flex items-center justify-center gap-2 mb-4">
-                    <svg class="w-10 h-10 text-red-600" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
-                    </svg>
-                    <span class="text-3xl font-bold text-gray-900">RedPulse RHU</span>
-                </a>
-                <div class="flex items-center justify-center gap-2 mb-1">
-                    <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.856-1.487M15 10a3 3 0 11-6 0 3 3 0 016 0zM16 12a4 4 0 11-8 0 4 4 0 018 0zm4 4h.01M12 20h.01"></path>
-                    </svg>
-                    <h1 class="text-2xl font-bold text-gray-900">BHW Portal</h1>
-                </div>
-                <div class="flex items-center justify-center gap-1 text-gray-500 text-sm">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path>
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                    </svg>
-                    <span>Nasugbu Rural Health Unit</span>
-                </div>
-            </div>
+<body class="bg-slate-950 text-white font-sans antialiased min-h-screen flex flex-col justify-between selection:bg-emerald-500 selection:text-white">
 
-            <!-- Login Form -->
-            <div class="bg-white rounded-2xl shadow-xl p-8 border border-gray-100">
+    <!-- Ambient Background Glows -->
+    <div class="fixed top-0 left-1/4 w-96 h-96 bg-emerald-600/15 rounded-full blur-3xl pointer-events-none"></div>
+    <div class="fixed bottom-0 right-1/4 w-96 h-96 bg-teal-600/15 rounded-full blur-3xl pointer-events-none"></div>
+
+    <!-- Navigation Header -->
+    <header class="p-6 relative z-10">
+        <div class="max-w-7xl mx-auto flex items-center justify-between">
+            <a href="LandingPage.php" class="flex items-center gap-3 group">
+                <img src="resihunity_logo.jpg" alt="ResiHUnity Logo" class="h-10 w-auto object-contain rounded-xl bg-white/10 p-0.5 shadow-md group-hover:scale-105 transition-transform" />
+                <span class="text-xl font-extrabold tracking-tight text-white">ResiHUnity <span class="text-emerald-400">RHU</span></span>
+            </a>
+            <a href="LandingPage.php" class="text-xs font-semibold text-slate-300 hover:text-white transition-colors flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:bg-slate-800">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+                Back to Home
+            </a>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="flex-1 flex items-center justify-center p-4 py-6 relative z-10">
+        <div class="w-full max-w-md">
+            
+            <!-- Login Card -->
+            <div class="rounded-3xl border border-slate-800 bg-slate-900/90 p-6 sm:p-8 shadow-2xl space-y-5">
+                
+                <!-- Card Header -->
+                <div class="text-center space-y-1.5">
+                    <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-bold uppercase tracking-wider">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.856-1.487M15 10a3 3 0 11-6 0 3 3 0 016 0zM16 12a4 4 0 11-8 0 4 4 0 018 0zm4 4h.01M12 20h.01"/></svg>
+                        Barangay Health Worker
+                    </span>
+                    <h1 class="text-2xl font-extrabold text-white">BHW Portal Sign In</h1>
+                    <p class="text-xs text-slate-400">Field Health Monitoring & Community Service Desk</p>
+                </div>
+
+                <!-- Error Alert -->
                 <?php if ($error): ?>
-                    <div class="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
-                        <p class="text-red-700 text-sm"><?= $error ?></p>
+                    <div class="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-medium flex items-center gap-2.5">
+                        <svg class="w-4 h-4 text-rose-400 shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+                        <span><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></span>
                     </div>
                 <?php endif; ?>
 
-                <form method="POST" class="space-y-5">
-                    <!-- Barangay -->
-                    <div>
-                        <label class="block text-sm font-semibold text-gray-700 mb-2">Assigned Barangay</label>
+                <!-- Form -->
+                <form method="POST" class="space-y-4">
+                    <input type="hidden" name="login_bhw" value="1">
+                    
+                    <!-- Barangay Field -->
+                    <div class="space-y-1.5">
+                        <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider">Assigned Barangay</label>
                         <div class="relative">
-                            <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path>
-                            </svg>
-                            <select name="barangay" required value="<?= $barangay ?>" class="w-full pl-11 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent appearance-none">
-                                <option value="">Select your barangay</option>
+                            <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                            </span>
+                            <select name="barangay" required class="w-full rounded-xl border border-slate-700 bg-slate-800 text-white pl-10 pr-8 py-3 text-sm font-semibold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 outline-none appearance-none cursor-pointer">
+                                <option value="" class="bg-slate-800 text-white">Select your assigned barangay</option>
                                 <?php foreach ($barangays as $b): ?>
-                                    <option value="<?= $b ?>" <?= $barangay === $b ? 'selected' : '' ?>><?= $b ?></option>
+                                    <option value="<?= htmlspecialchars($b, ENT_QUOTES, 'UTF-8') ?>" class="bg-slate-800 text-white font-medium" <?= $barangay === $b ? 'selected' : '' ?>>
+                                        <?= htmlspecialchars($b, ENT_QUOTES, 'UTF-8') ?>
+                                    </option>
                                 <?php endforeach; ?>
                             </select>
+                            <span class="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none text-slate-400">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                            </span>
                         </div>
                     </div>
 
-                    <!-- BHW Cert Number -->
-                    <div>
-                        <label class="block text-sm font-semibold text-gray-700 mb-2">BHW Certification Number</label>
-                        <input type="text" name="certNumber" required value="<?= $certNumber ?>" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent" placeholder="BHW-BAT-YYYY-###" />
+                    <!-- Certification Number -->
+                    <div class="space-y-1.5">
+                        <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider">BHW Certification Number</label>
+                        <div class="relative">
+                            <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                            </span>
+                            <input type="text" name="certNumber" required value="<?= htmlspecialchars($certNumber, ENT_QUOTES, 'UTF-8') ?>" class="w-full rounded-xl border border-slate-700 bg-slate-800 text-white placeholder-slate-400 pl-10 pr-4 py-3 text-sm font-medium focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 outline-none transition-all" placeholder="e.g. BHW-BAT-2024-001" />
+                        </div>
                     </div>
 
-                    <!-- Email -->
-                    <div>
-                        <label class="block text-sm font-semibold text-gray-700 mb-2">Email Address</label>
+                    <!-- Email Address -->
+                    <div class="space-y-1.5">
+                        <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider">Registered Email Address</label>
                         <div class="relative">
-                            <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
-                            </svg>
-                            <input type="email" name="email" required value="<?= $email ?>" class="w-full pl-11 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent" placeholder="your.name@nasugbu.gov.ph" />
+                            <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                            </span>
+                            <input type="email" name="email" required value="<?= htmlspecialchars($email, ENT_QUOTES, 'UTF-8') ?>" class="w-full rounded-xl border border-slate-700 bg-slate-800 text-white placeholder-slate-400 pl-10 pr-4 py-3 text-sm font-medium focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 outline-none transition-all" placeholder="bhw.name@nasugbu.gov.ph" />
                         </div>
                     </div>
 
                     <!-- Password -->
-                    <div>
-                        <label class="block text-sm font-semibold text-gray-700 mb-2">Password</label>
+                    <div class="space-y-1.5">
+                        <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider">Password</label>
                         <div class="relative">
-                            <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
-                            </svg>
-                            <input type="<?= $showPassword ? 'text' : 'password' ?>" name="password" required value="<?= $password ?>" class="w-full pl-11 pr-11 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent" placeholder="Enter your password" />
-                            <button type="submit" name="toggle_password_bhw" value="1" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                                <?php if ($showPassword): ?>
-                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
-                                    </svg>
-                                <?php else: ?>
-                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-4.803m5.604-1.752A10.05 10.05 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.064 10.064 0 01-5.999 5.999m3.12 3.12l-5.8-5.8m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88"></path>
-                                    </svg>
-                                <?php endif; ?>
+                            <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                            </span>
+                            <input id="pwd" type="password" name="password" required value="<?= htmlspecialchars($password, ENT_QUOTES, 'UTF-8') ?>" class="w-full rounded-xl border border-slate-700 bg-slate-800 text-white placeholder-slate-400 pl-10 pr-12 py-3 text-sm font-medium focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 outline-none transition-all" placeholder="Enter BHW password" />
+                            <button type="button" id="togglePwd" class="absolute inset-y-0 right-0 pr-3.5 flex items-center text-xs font-bold text-slate-400 hover:text-emerald-300 transition-colors">
+                                Show
                             </button>
                         </div>
                     </div>
 
-                    <!-- reCAPTCHA -->
-                    <div class="mt-2">
-                        <div class="g-recaptcha" data-sitekey="<?= RECAPTCHA_SITE_KEY ?>"></div>
-                        <input type="hidden" name="captcha" value="1">
-                    </div>
-
                     <!-- Submit -->
-                    <button type="submit" name="login_bhw" value="1" class="w-full bg-gradient-to-r from-green-600 to-green-700 text-white py-3 rounded-lg font-semibold hover:from-green-700 hover:to-green-800 transition-all shadow-lg hover:shadow-xl">
-                        Sign In to BHW Portal
-                    </button>
+                    <div class="pt-2">
+                        <button type="submit" class="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-sm shadow-lg shadow-emerald-600/25 transition-all flex items-center justify-center gap-2">
+                            <span>Sign In to BHW Portal</span>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l7-7m-7 7H3"/></svg>
+                        </button>
+                    </div>
                 </form>
 
-                <div class="mt-5 p-3 bg-green-50 rounded-lg border border-green-100 flex items-start gap-2">
-                    <svg class="w-4 h-4 text-green-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                    </svg>
-                    <p class="text-xs text-green-700">For account registration or password reset, please contact Nasugbu RHU at (043) 416-1234.</p>
+                <!-- Help Alert -->
+                <div class="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300 flex items-start gap-2.5 leading-relaxed">
+                    <svg class="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    <span>For BHW registration or password resets, please contact Nasugbu RHU Main Office at (043) 416-1234.</span>
                 </div>
-            </div>
 
-            <!-- Footer Links -->
-            <div class="mt-6 text-center space-y-3">
-                <div class="flex items-center justify-center gap-4 text-sm">
-                    <a href="DonorDashboard.php" class="text-gray-600 hover:text-red-600 font-semibold">Donor Portal</a>
-                    <span class="text-gray-300">|</span>
-                    <a href="RHULogin.php" class="text-gray-600 hover:text-blue-600 font-semibold">RHU Staff Login</a>
+                <!-- Footer Switcher -->
+                <div class="pt-1 text-center">
+                    <span class="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">Other System Portals</span>
+                    <div class="flex items-center justify-center gap-3 text-xs text-slate-300">
+                        <a href="RHULogin.php" class="hover:text-emerald-400 hover:underline">RHU Staff Login</a>
+                        <span class="text-slate-700">•</span>
+                        <a href="RHUAdminLogin.php" class="hover:text-emerald-400 hover:underline">Admin Console</a>
+                        <span class="text-slate-700">•</span>
+                        <a href="ResidentLogin.php" class="hover:text-emerald-400 hover:underline">Resident Portal</a>
+                    </div>
                 </div>
-                <a href="LandingPage.php" class="inline-block text-sm text-gray-500 hover:text-gray-700">← Back to Home</a>
+
             </div>
         </div>
-    </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="p-4 text-center text-xs text-slate-500 relative z-10">
+        <p>© <?= date('Y') ?> Nasugbu Rural Health Unit I. Republic Act 10173 Data Privacy Compliant.</p>
+    </footer>
+
+    <script>
+        document.getElementById('togglePwd')?.addEventListener('click', function(){
+            const p = document.getElementById('pwd');
+            if (!p) return;
+            if (p.type === 'password') { 
+                p.type = 'text'; 
+                this.textContent = 'Hide'; 
+            } else { 
+                p.type = 'password'; 
+                this.textContent = 'Show'; 
+            }
+        });
+    </script>
 </body>
 </html>

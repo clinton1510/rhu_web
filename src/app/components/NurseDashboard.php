@@ -205,7 +205,7 @@ $todayOPDCount = count($opdConsultations);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Public Health Nurse Portal - RedPulse RHU</title>
+    <title>Public Health Nurse Portal - ResiHUnity RHU</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {

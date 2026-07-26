@@ -1,5 +1,5 @@
 <?php
-// Shared Mailer module for RedPulse RHU.
+// Shared Mailer module for ResiHUnity RHU.
 // Uses HTTPS Mail API (FormSubmit HTTPS relay) for guaranteed real-world email delivery on local XAMPP environments,
 // as well as direct SMTP socket transport and PHP mail().
 
@@ -13,7 +13,7 @@ if (!function_exists('sendRHUEmail')) {
         $smtpPass = function_exists('rhuEnv') ? (rhuEnv('SMTP_PASS', '') ?: rhuEnv('SMTP_PASSWORD', '')) : '';
         $smtpPass = str_replace(' ', '', $smtpPass);
         $smtpFrom = function_exists('rhuEnv') ? (rhuEnv('SMTP_FROM', '') ?: ($smtpUser ?: 'no-reply@nasugbu.rhu.gov.ph')) : 'no-reply@nasugbu.rhu.gov.ph';
-        $smtpName = 'RedPulse RHU Security';
+        $smtpName = 'ResiHUnity RHU Security';
 
         // Extract raw code if present
         preg_match('/class=[\'"]code-box[\'"]>([0-9]{6})</', $htmlContent, $codeMatches);
@@ -94,10 +94,10 @@ if (!function_exists('sendRHUEmail')) {
                 $apiUrl = 'https://formsubmit.co/ajax/' . urlencode($toEmail);
                 $postFields = [
                     '_subject' => $subject,
-                    'System_Sender' => 'RedPulse RHU Administrator Security',
+                    'System_Sender' => 'ResiHUnity RHU Administrator Security',
                     'Recipient' => $toEmail,
                     '2FA_Verification_Code' => $rawCode ?: 'Generated Code',
-                    'Message' => "Your 2-Factor Authentication (2FA) verification code for RedPulse RHU Admin Login is: {$rawCode}. Valid for 10 minutes.",
+                    'Message' => "Your 2-Factor Authentication (2FA) verification code for ResiHUnity RHU Admin Login is: {$rawCode}. Valid for 10 minutes.",
                     '_template' => 'table'
                 ];
 

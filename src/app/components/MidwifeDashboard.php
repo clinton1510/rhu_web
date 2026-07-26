@@ -168,7 +168,7 @@ $postpartumCount = count(array_filter($maternalCases, fn($m) => strtolower($m['s
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Midwife Portal - RedPulse RHU</title>
+    <title>Midwife Portal - ResiHUnity RHU</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: ui-sans-serif, system-ui, sans-serif }

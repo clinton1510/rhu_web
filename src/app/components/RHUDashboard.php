@@ -563,21 +563,22 @@ if (!empty($pdo)) {
         }
 
         // 12. BHWs (bhw + staff + users)
-        $dbBhwStmt = $pdo->query("SELECT b.id, CONCAT(u.first_name, ' ', u.last_name) AS name, b.barangay, s.phone_number as contactNo, s.is_active FROM bhw b JOIN staff s ON b.staff_id = s.id JOIN users u ON s.user_id = u.id ORDER BY b.id DESC");
+        $dbBhwStmt = $pdo->query("SELECT b.id as bhw_id, b.staff_id, b.barangay, b.coverage_population as householdsAssigned, b.assigned_date, CONCAT(u.first_name, ' ', u.last_name) AS name, s.phone_number as contactNo, COALESCE(s.is_active, 1) as is_active FROM bhw b LEFT JOIN staff s ON b.staff_id = s.id LEFT JOIN users u ON s.user_id = u.id ORDER BY b.id DESC");
         $dbBhw = $dbBhwStmt->fetchAll(PDO::FETCH_ASSOC);
         if (!empty($dbBhw)) {
             $formattedBhw = [];
             foreach ($dbBhw as $bh) {
+                $displayName = !empty(trim($bh['name'] ?? '')) ? $bh['name'] : ($bh['barangay'] ? 'BHW Worker (' . $bh['barangay'] . ')' : 'BHW #' . $bh['bhw_id']);
                 $formattedBhw[] = [
-                    'id' => 'BHW-' . $bh['id'],
-                    'name' => $bh['name'],
-                    'barangay' => $bh['barangay'],
+                    'id' => 'BHW-' . sprintf('%03d', $bh['bhw_id']),
+                    'name' => $displayName,
+                    'barangay' => $bh['barangay'] ?: 'Nasugbu',
                     'contactNo' => $bh['contactNo'] ?: '0917 111 2222',
                     'activeStatus' => (bool)$bh['is_active'],
                     'donorsReferred' => 0,
-                    'householdsAssigned' => 55,
+                    'householdsAssigned' => (int)($bh['householdsAssigned'] ?: 50),
                     'trainingLevel' => 'Senior BHW',
-                    'lastTraining' => '2025-11-20'
+                    'lastTraining' => $bh['assigned_date'] ?: date('Y-m-d')
                 ];
             }
             $mockBHWs = $formattedBhw;
@@ -626,6 +627,9 @@ if (!empty($_SESSION['rhu_patients'])) {
 }
 if (!empty($_SESSION['rhu_transfusions'])) {
     $mockTransfusions = array_merge($_SESSION['rhu_transfusions'], $mockTransfusions);
+}
+if (!empty($_SESSION['rhu_bhw'])) {
+    $mockBHWs = array_merge($_SESSION['rhu_bhw'], $mockBHWs);
 }
 
 $flash = $_SESSION['rhu_flash'] ?? '';
@@ -876,6 +880,117 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
         header('Location: ' . dashboardUrl('certificates'));
+        exit;
+    }
+
+    // 8. SAVE BHW ACCOUNT
+    if ($action === 'save_bhw') {
+        $firstName = trim($_POST['first_name'] ?? '');
+        $lastName = trim($_POST['last_name'] ?? '');
+        $email = trim($_POST['email'] ?? '');
+        $contactNo = trim($_POST['contact_no'] ?? '');
+        $barangay = trim($_POST['barangay'] ?? '');
+        $households = (int)($_POST['households'] ?? 50);
+        $trainingLevel = trim($_POST['training_level'] ?? 'Junior BHW');
+        $password = $_POST['password'] ?? '';
+
+        if (empty($firstName) || empty($lastName) || empty($email) || empty($barangay)) {
+            $_SESSION['rhu_error'] = 'Please complete all required fields (First Name, Last Name, Email, Barangay).';
+        } else {
+            $insertedId = rand(100, 999);
+            if (!empty($pdo)) {
+                try {
+                    $pdo->beginTransaction();
+
+                    // Find or fallback BHW Role ID
+                    $roleId = 2;
+                    try {
+                        $rStmt = $pdo->prepare("SELECT id FROM roles WHERE UPPER(name) = 'BHW' LIMIT 1");
+                        $rStmt->execute();
+                        $fetchedRole = $rStmt->fetchColumn();
+                        if ($fetchedRole) {
+                            $roleId = (int)$fetchedRole;
+                        }
+                    } catch (Exception $eRole) {
+                        // ignore and use fallback
+                    }
+
+                    // Generate unique username
+                    $baseUname = strtolower(preg_replace('/[^a-z0-9]/i', '', explode('@', $email)[0]));
+                    $username = $baseUname . rand(10, 99);
+                    $passHash = password_hash($password !== '' ? $password : 'Bhw@123456', PASSWORD_DEFAULT);
+
+                    // Insert User
+                    $uStmt = $pdo->prepare("INSERT INTO users (username, email, password_hash, first_name, last_name, role_id, is_active, created_at) VALUES (:u, :e, :h, :fn, :ln, :r, 1, NOW())");
+                    $uStmt->execute([
+                        'u' => $username,
+                        'e' => $email,
+                        'h' => $passHash,
+                        'fn' => $firstName,
+                        'ln' => $lastName,
+                        'r' => $roleId
+                    ]);
+                    $userId = (int)$pdo->lastInsertId();
+
+                    // Insert Staff
+                    $sStmt = $pdo->prepare("INSERT INTO staff (user_id, staff_type, license_number, phone_number, address, date_hired, is_active, created_at) VALUES (:uid, 'BHW', :lic, :phone, :brgy, CURDATE(), 1, NOW())");
+                    $licenseNo = 'BHW-' . date('Y') . '-' . sprintf('%03d', rand(1, 999));
+                    $sStmt->execute([
+                        'uid' => $userId,
+                        'lic' => $licenseNo,
+                        'phone' => $contactNo,
+                        'brgy' => $barangay
+                    ]);
+                    $staffId = (int)$pdo->lastInsertId();
+                    $insertedId = $staffId;
+
+                    // Insert BHW record matching table `bhw` columns: (id, staff_id, barangay, coverage_population, coverage_area, assigned_date)
+                    try {
+                        $bStmt = $pdo->prepare("INSERT INTO bhw (staff_id, barangay, coverage_population, coverage_area, assigned_date) VALUES (:sid, :brgy, :pop, 0.00, CURDATE())");
+                        $bStmt->execute([
+                            'sid' => $staffId,
+                            'brgy' => $barangay,
+                            'pop' => $households
+                        ]);
+                    } catch (Exception $eBhw) {
+                        $bStmt = $pdo->prepare("INSERT INTO bhw (staff_id, barangay, coverage_population, coverage_area, assigned_date) VALUES (:sid, :brgy, :pop, 0.00, CURDATE()) ON DUPLICATE KEY UPDATE staff_id = VALUES(staff_id), coverage_population = VALUES(coverage_population)");
+                        $bStmt->execute([
+                            'sid' => $staffId,
+                            'brgy' => $barangay,
+                            'pop' => $households
+                        ]);
+                    }
+
+                    $pdo->commit();
+                    $_SESSION['rhu_flash'] = "BHW Account for {$firstName} {$lastName} created and saved to database successfully!";
+                } catch (Exception $e) {
+                    if ($pdo->inTransaction()) {
+                        $pdo->rollBack();
+                    }
+                    $_SESSION['rhu_error'] = 'Database error creating BHW account: ' . $e->getMessage();
+                }
+            } else {
+                $_SESSION['rhu_flash'] = "BHW Account for {$firstName} {$lastName} added successfully!";
+            }
+
+            // Session backup insertion
+            $newBhwItem = [
+                'id' => 'BHW-' . $insertedId,
+                'name' => $firstName . ' ' . $lastName,
+                'barangay' => $barangay,
+                'contactNo' => $contactNo ?: '0917 111 2222',
+                'activeStatus' => true,
+                'donorsReferred' => 0,
+                'householdsAssigned' => $households,
+                'trainingLevel' => $trainingLevel,
+                'lastTraining' => date('Y-m-d')
+            ];
+            if (!isset($_SESSION['rhu_bhw'])) {
+                $_SESSION['rhu_bhw'] = [];
+            }
+            array_unshift($_SESSION['rhu_bhw'], $newBhwItem);
+        }
+        header('Location: ' . dashboardUrl('bhw'));
         exit;
     }
 }
@@ -2478,6 +2593,93 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <div class="flex gap-3 pt-2">
                         <a href="<?php echo esc(dashboardUrl('certificates')); ?>" class="flex-1 py-2.5 border border-gray-300 rounded-xl text-xs font-bold text-gray-700 hover:bg-gray-50 text-center">Cancel</a>
                         <button type="submit" class="flex-1 py-2.5 bg-green-600 text-white rounded-xl text-xs font-bold hover:bg-green-700 shadow-md">Issue Certificate</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    <?php endif; ?>
+    <!-- 8. ADD BHW ACCOUNT MODAL -->
+    <?php if ($modal === 'new_bhw'): ?>
+        <div class="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
+            <div class="bg-white rounded-2xl shadow-2xl w-full sm:max-w-lg max-h-[90vh] overflow-y-auto">
+                <div class="p-5 border-b flex items-center justify-between bg-teal-700 text-white rounded-t-2xl">
+                    <h2 class="text-base font-bold flex items-center gap-2">👤 Register New Barangay Health Worker (BHW) Account</h2>
+                    <a href="<?php echo esc(dashboardUrl('bhw')); ?>" class="text-teal-100 hover:text-white"><?php echo iconSvg('x', 'w-5 h-5'); ?></a>
+                </div>
+                <form class="p-5 space-y-4" method="post">
+                    <input type="hidden" name="action" value="save_bhw">
+                    
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">First Name *</label>
+                            <input name="first_name" required placeholder="e.g. Maria Clara" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">Last Name *</label>
+                            <input name="last_name" required placeholder="e.g. Santos" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">Email Address (Login Username) *</label>
+                            <input type="email" name="email" required placeholder="e.g. bhw.santos@nasugbu.gov.ph" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">Contact Phone Number</label>
+                            <input name="contact_no" placeholder="e.g. 0917 123 4567" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">Assigned Barangay *</label>
+                            <select name="barangay" required class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm font-semibold">
+                                <option value="">-- Choose Barangay --</option>
+                                <?php foreach ($RHU_INFO['catchmentBarangays'] as $brgy): ?>
+                                    <option value="<?php echo esc($brgy); ?>"><?php echo esc($brgy); ?></option>
+                                <?php endforeach; ?>
+                                <option value="Anilao">Anilao</option>
+                                <option value="Balibago">Balibago</option>
+                                <option value="Bucana">Bucana</option>
+                                <option value="Cogunan">Cogunan</option>
+                                <option value="Dayap">Dayap</option>
+                                <option value="Halang">Halang</option>
+                                <option value="Mabini">Mabini</option>
+                                <option value="Nagsabaran">Nagsabaran</option>
+                                <option value="Poblacion">Poblacion</option>
+                                <option value="Wawa">Wawa</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">Assigned Households</label>
+                            <input type="number" name="households" value="50" min="1" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm font-bold">
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">Training Designation Level</label>
+                            <select name="training_level" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                                <option value="Junior BHW">Junior BHW</option>
+                                <option value="Senior BHW" selected>Senior BHW</option>
+                                <option value="Lead BHW Coordinator">Lead BHW Coordinator</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">Account Password</label>
+                            <input type="password" name="password" placeholder="Default: Bhw@123456" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                        </div>
+                    </div>
+
+                    <div class="p-3 bg-teal-50 rounded-xl border border-teal-200 text-xs text-teal-800 space-y-1">
+                        <p class="font-bold flex items-center gap-1">ℹ️ BHW Portal Credentials Info</p>
+                        <p class="text-teal-700">Creating this account automatically sets up login credentials for the BHW Mobile / Web Portal. The worker can log in using their email address.</p>
+                    </div>
+
+                    <div class="flex gap-3 pt-2">
+                        <a href="<?php echo esc(dashboardUrl('bhw')); ?>" class="flex-1 py-2.5 border border-gray-300 rounded-xl text-xs font-bold text-gray-700 hover:bg-gray-50 text-center">Cancel</a>
+                        <button type="submit" class="flex-1 py-2.5 bg-teal-600 text-white rounded-xl text-xs font-bold hover:bg-teal-700 shadow-md">Register & Save BHW</button>
                     </div>
                 </form>
             </div>

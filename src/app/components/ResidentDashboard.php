@@ -208,13 +208,13 @@ $dotClasses = ['red' => 'bg-red-500', 'pink' => 'bg-pink-500', 'blue' => 'bg-blu
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Resident Dashboard - RedPulse RHU</title>
+  <title>Resident Dashboard - ResiHUnity RHU</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="min-h-screen bg-gray-50">
   <header class="sticky top-0 z-40 bg-gradient-to-r from-emerald-700 to-teal-700 text-white shadow-xl">
     <div class="px-4 py-3 sm:px-6"><div class="flex flex-wrap items-center justify-between gap-2">
-      <div class="flex items-center gap-3"><div class="flex h-9 w-9 items-center justify-center rounded-xl bg-white/20 text-red-300">♥</div><div><h1 class="text-base font-bold">RedPulse RHU</h1><p class="text-xs text-emerald-200">Resident Health Portal</p></div></div>
+      <div class="flex items-center gap-3"><div class="flex h-9 w-9 items-center justify-center rounded-xl bg-white/20 text-red-300">♥</div><div><h1 class="text-base font-bold">ResiHUnity RHU</h1><p class="text-xs text-emerald-200">Resident Health Portal</p></div></div>
       <div class="flex items-center gap-2">
         <div class="relative"><button type="button" data-notifications class="relative rounded-lg p-2 hover:bg-white/10" aria-label="Notifications">♢<span class="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-400"></span></button>
           <div data-notification-panel class="hidden absolute right-0 top-10 z-50 w-72 overflow-hidden rounded-xl border border-gray-100 bg-white text-gray-800 shadow-2xl"><div class="flex items-center justify-between border-b p-3"><p class="text-sm font-bold">Notifications</p><button type="button" data-close-notifications class="text-xs font-medium text-gray-500">Close</button></div><div class="border-b bg-emerald-50/60 p-3 text-xs"><p>Your hypertension follow-up is due on July 10, 2026.</p><p class="mt-1 text-gray-400">2 days ago</p></div><div class="border-b bg-emerald-50/60 p-3 text-xs"><p>Annual influenza vaccine due October 2026. Schedule now.</p><p class="mt-1 text-gray-400">1 week ago</p></div><div class="p-3 text-xs"><p>Medical certificate HC-2026-041 is ready for download.</p><p class="mt-1 text-gray-400">Jun 10</p></div></div>
