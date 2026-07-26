@@ -8,9 +8,9 @@ if (!function_exists('e')) {
 }
 
 /**
- * Fetches the single active Admin account from the database.
+ * Fetches an active administrator account from the database.
  */
-function getActiveAdminAccount(?PDO $pdo): ?array
+function getActiveAdminAccount(?PDO $pdo, ?string $email = null): ?array
 {
   if (!$pdo) return null;
   try {
@@ -24,10 +24,11 @@ function getActiveAdminAccount(?PDO $pdo): ?array
       LEFT JOIN roles r ON u.role_id = r.id 
       WHERE u.is_active = 1 
       AND (r.name IN ('RHU_ADMIN', 'SUPER_ADMIN', 'ADMIN_STAFF') OR u.role_id = 9)
+      AND (:email IS NULL OR LOWER(u.email) = LOWER(:email_match))
       ORDER BY u.id ASC 
       LIMIT 1
     ");
-    $stmt->execute();
+    $stmt->execute(['email' => $email, 'email_match' => $email]);
     $admin = $stmt->fetch(PDO::FETCH_ASSOC);
     return $admin ?: null;
   } catch (Exception $e) {
@@ -112,6 +113,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   if ($actionStep === 'credentials') {
     $email = trim($_POST['email'] ?? '');
     $password = $_POST['password'] ?? '';
+    $activeAdmin = $email !== '' ? getActiveAdminAccount($pdo, $email) : null;
 
     if (!$email || !$password) {
       $error = 'Please enter your admin email address and password.';
@@ -120,10 +122,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif (!$activeAdmin) {
       $error = 'No active administrator account exists in the database. Registration is required.';
     } else {
-      // 1. STRICT UNIQUE ACCOUNT CHECK: Email MUST match the unique registered admin email in DB!
-      if (strtolower($email) !== strtolower($activeAdmin['email'])) {
-        $error = 'Access denied. Only the registered System Administrator account is authorized to sign in.';
-      } elseif (!password_verify($password, $activeAdmin['password_hash'])) {
+      if (!password_verify($password, $activeAdmin['password_hash'])) {
         $error = 'Incorrect password for the System Administrator account.';
       } else {
         $loginSettings = portalSettings($pdo);
