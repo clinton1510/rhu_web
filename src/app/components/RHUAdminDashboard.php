@@ -3,6 +3,7 @@ if (session_status() === PHP_SESSION_NONE) session_start();
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/portal.php';
 require_once __DIR__ . '/mailer.php';
+require_once __DIR__ . '/admin_extended.php';
 portalRequireAdmin();
 
 if (isset($_GET['logout'])) {
@@ -37,6 +38,16 @@ if (($_GET['export'] ?? '') === 'summary' && $pdo) {
     }
     fclose($output);
     exit;
+}
+
+if (($_GET['backup'] ?? '') === 'sql' && $pdo) {
+    portalAudit($pdo, (int)$_SESSION['user']['user_id'], 'Downloaded SQL database backup', 'system', null);
+    adminDownloadSqlBackup($pdo);
+}
+
+if (isset($_GET['certificate_pdf']) && ctype_digit((string)$_GET['certificate_pdf']) && $pdo) {
+    portalAudit($pdo, (int)$_SESSION['user']['user_id'], 'Downloaded certificate PDF', 'health_certificates', (int)$_GET['certificate_pdf']);
+    adminDownloadCertificatePdf($pdo, (int)$_GET['certificate_pdf']);
 }
 
 /**
@@ -78,6 +89,11 @@ function iconSvg(string $name, string $class = 'w-5 h-5'): string
         'mail' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>',
         'phone' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.18 2 2 0 0 1 4.09 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.77.6 2.6a2 2 0 0 1-.45 2.11L8 9a16 16 0 0 0 7 7l.57-1.24a2 2 0 0 1 2.11-.45c.83.27 1.7.48 2.6.6A2 2 0 0 1 22 16.92z"/></svg>',
         'key' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.5 12.5L21 2"/><path d="M17 5l2 2"/></svg>',
+        'menu' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>',
+        'close' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+        'baby' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12h.01M15 12h.01"/><path d="M10 16c.5.35 1.17.5 2 .5s1.5-.15 2-.5"/><path d="M12 3a9 9 0 1 0 9 9c0-2.5-1-4.7-2.7-6.3"/><path d="M12 3c2 0 3 1 3 2.5S14 8 12 8"/></svg>',
+        'alert' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 2.9 1.8 17a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 2.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>',
+        'pill' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m10.5 20.5 10-10a5 5 0 0 0-7-7l-10 10a5 5 0 0 0 7 7Z"/><path d="m8.5 8.5 7 7"/></svg>',
     ];
 
     return $icons[$name] ?? '';
@@ -161,10 +177,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
     if ($action === 'approve_certificate') {
         $certId = (int)($_POST['request_id'] ?? 0);
         if ($certId > 0) {
+            $residentId = (int)$pdo->query("SELECT resident_id FROM health_certificates WHERE id = {$certId}")->fetchColumn();
             $certNo = 'CERT-' . date('Y') . '-' . str_pad((string)$certId, 4, '0', STR_PAD_LEFT);
             $stmt = $pdo->prepare("UPDATE health_certificates SET validity_status = 'Approved & Issued', certificate_number = :cert_no, issue_date = CURDATE(), rejection_reason = NULL WHERE id = :id");
             $stmt->execute(['cert_no' => $certNo, 'id' => $certId]);
             portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Approved Certificate Request #{$certId} (Cert No: {$certNo})", 'health_certificates', $certId);
+            portalNotifyResident($pdo, $residentId, "Your certificate {$certNo} is approved and ready.", 'ResidentDashboard.php?tab=certificates');
             $flashSuccess = "Certificate request #{$certId} approved and issued successfully!";
         }
     }
@@ -174,9 +192,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
         $certId = (int)($_POST['request_id'] ?? 0);
         $reason = trim($_POST['rejection_reason'] ?? 'Requirements incomplete');
         if ($certId > 0) {
+            $residentId = (int)$pdo->query("SELECT resident_id FROM health_certificates WHERE id = {$certId}")->fetchColumn();
             $stmt = $pdo->prepare("UPDATE health_certificates SET validity_status = 'Rejected', rejection_reason = :reason WHERE id = :id");
             $stmt->execute(['reason' => $reason, 'id' => $certId]);
             portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Rejected Certificate Request #{$certId}", 'health_certificates', $certId);
+            portalNotifyResident($pdo, $residentId, 'Your certificate request was rejected: ' . $reason, 'ResidentDashboard.php?tab=certificates');
             $flashSuccess = "Certificate request #{$certId} rejected.";
         }
     }
@@ -186,9 +206,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
         $msgId = (int)($_POST['message_id'] ?? 0);
         $reply = trim($_POST['reply'] ?? '');
         if ($msgId > 0 && $reply !== '') {
+            $residentId = (int)$pdo->query("SELECT resident_id FROM messages WHERE id = {$msgId}")->fetchColumn();
             $stmt = $pdo->prepare("UPDATE messages SET admin_reply = :reply, status = 'Replied', replied_at = NOW() WHERE id = :id");
             $stmt->execute(['reply' => $reply, 'id' => $msgId]);
             portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Replied to Resident Message #{$msgId}", 'messages', $msgId);
+            portalNotifyResident($pdo, $residentId, 'RHU staff replied to your message.', 'ResidentDashboard.php?tab=contact');
             $flashSuccess = "Reply sent to resident message #{$msgId}.";
         }
     }
@@ -221,11 +243,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
 
     if ($action === 'update_consultation') {
         $id = (int)($_POST['consultation_id'] ?? 0);
-        $stmt = $pdo->prepare('UPDATE consultations SET diagnosis = :diagnosis, treatment_plan = :treatment_plan, follow_up_date = :follow_up_date WHERE id = :id');
+        $stmt = $pdo->prepare('UPDATE consultations SET diagnosis = :diagnosis, treatment_plan = :treatment_plan, follow_up_date = :follow_up_date, physician_id = COALESCE(:physician_id, physician_id), consultation_status = :status WHERE id = :id');
         $stmt->execute([
             'diagnosis' => trim($_POST['diagnosis'] ?? ''),
             'treatment_plan' => trim($_POST['treatment_plan'] ?? ''),
             'follow_up_date' => ($_POST['follow_up_date'] ?? '') ?: null,
+            'physician_id' => ($_POST['physician_id'] ?? '') ?: null,
+            'status' => trim($_POST['consultation_status'] ?? 'Scheduled'),
             'id' => $id,
         ]);
         portalAudit($pdo, (int)$_SESSION['user']['user_id'], 'Updated consultation', 'consultations', $id);
@@ -398,6 +422,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
             }
         }
     }
+
+    try {
+        $extendedMessage = adminExtendedAction($pdo, $action, (int)$_SESSION['user']['user_id']);
+        if ($extendedMessage !== null) $flashSuccess = $extendedMessage;
+    } catch (Throwable $extendedError) {
+        error_log('Extended admin action: ' . $extendedError->getMessage());
+        $flashError = 'The requested operation failed: ' . $extendedError->getMessage();
+    }
 }
 
 // RHU Profile Settings
@@ -529,7 +561,7 @@ if (!empty($pdo)) {
         // Consultations
         try {
             $cslStmt = $pdo->query("
-                SELECT c.id, c.resident_id, r.first_name, r.last_name, r.barangay, c.chief_complaint, c.diagnosis, c.physician_id, c.consultation_date
+                SELECT c.id, c.resident_id, r.first_name, r.last_name, r.barangay, c.chief_complaint, c.diagnosis, c.physician_id, c.consultation_date, c.consultation_status
                 FROM consultations c
                 LEFT JOIN residents r ON c.resident_id = r.id
                 ORDER BY c.consultation_date DESC LIMIT 100
@@ -675,6 +707,14 @@ $tabIconMap = [
     'security' => 'lock',
 ];
 
+$drawerGroups = [
+    'Dashboard' => ['overview'],
+    'People & Accounts' => ['users', 'staff', 'residents'],
+    'Clinical Services' => ['consultations', 'maternal', 'vaccination', 'disease'],
+    'Records & Resources' => ['medicine', 'vital'],
+    'Governance' => ['reports', 'audit', 'system', 'security'],
+];
+
 function tabUrl(string $tab, bool $notifs = false, array $extra = []): string
 {
     $params = ['tab' => $tab];
@@ -707,15 +747,145 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RHU Admin Dashboard - RedPulse RHU</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        html { scroll-behavior: smooth; }
+        body { overflow-x: hidden; }
+
+        .dashboard-header {
+            transition: box-shadow .28s ease, transform .28s ease;
+            will-change: box-shadow;
+        }
+        .dashboard-header.is-scrolled {
+            box-shadow: 0 16px 35px -22px rgba(15, 23, 42, .75);
+        }
+        .feature-drawer-backdrop {
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity .28s ease;
+        }
+        .feature-drawer-backdrop.is-open {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .feature-drawer {
+            transform: translateX(-102%);
+            transition: transform .34s cubic-bezier(.2, .75, .25, 1);
+            will-change: transform;
+        }
+        .feature-drawer.is-open {
+            transform: translateX(0);
+        }
+        .feature-drawer a svg {
+            transition: transform .2s ease;
+        }
+        .feature-drawer a:hover svg {
+            transform: scale(1.08);
+        }
+        body.drawer-open {
+            overflow: hidden;
+        }
+
+        main > div,
+        main > section,
+        main .bg-white.rounded-xl,
+        main .bg-white.rounded-2xl,
+        main details {
+            transition: transform .24s ease, box-shadow .24s ease, opacity .24s ease;
+        }
+        main .bg-white.rounded-xl:hover,
+        main .bg-white.rounded-2xl:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 14px 32px -24px rgba(15, 23, 42, .55);
+        }
+
+        [data-scroll-reveal] {
+            opacity: 0;
+            transform: translateY(18px) scale(.992);
+            transition:
+                opacity .58s cubic-bezier(.2, .75, .25, 1),
+                transform .58s cubic-bezier(.2, .75, .25, 1);
+            transition-delay: var(--reveal-delay, 0ms);
+        }
+        [data-scroll-reveal].is-visible {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+
+        table tbody tr {
+            transition: transform .18s ease, box-shadow .18s ease;
+        }
+        table tbody tr:not([hidden]):hover {
+            position: relative;
+            z-index: 1;
+            transform: translateX(3px);
+            box-shadow: -4px 0 0 currentColor;
+        }
+
+        button, a, input, select, textarea, summary {
+            transition:
+                transform .18s ease,
+                box-shadow .18s ease,
+                opacity .18s ease,
+                border-color .18s ease;
+        }
+        button:not(:disabled):active,
+        a:active {
+            transform: scale(.97);
+        }
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(15, 23, 42, .09);
+        }
+        details[open] > summary {
+            margin-bottom: .65rem;
+        }
+        details > summary::marker {
+            transition: transform .2s ease;
+        }
+
+        .metric-value-pop {
+            animation: metricPop .52s cubic-bezier(.2, .75, .25, 1) both;
+        }
+        @keyframes metricPop {
+            from { opacity: 0; transform: translateY(7px) scale(.94); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .scroll-top-button {
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(12px) scale(.92);
+            transition: opacity .22s ease, transform .22s ease;
+        }
+        .scroll-top-button.is-visible {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateY(0) scale(1);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            html { scroll-behavior: auto; }
+            *, *::before, *::after {
+                animation-duration: .01ms !important;
+                animation-iteration-count: 1 !important;
+                scroll-behavior: auto !important;
+                transition-duration: .01ms !important;
+            }
+            [data-scroll-reveal] { opacity: 1; transform: none; }
+        }
+    </style>
 </head>
 
 <body class="min-h-screen bg-gray-50 text-gray-900">
     <div class="min-h-screen flex flex-col">
         <!-- HEADER -->
-        <header class="bg-gradient-to-r from-slate-800 to-purple-900 text-white shadow-xl sticky top-0 z-40">
+        <header class="dashboard-header bg-gradient-to-r from-slate-800 to-purple-900 text-white shadow-xl sticky top-0 z-40">
             <div class="px-4 sm:px-6 py-3">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                     <div class="flex items-center gap-3">
+                        <button type="button" data-drawer-open class="flex h-9 w-9 items-center justify-center rounded-xl border border-white/20 bg-white/10 hover:bg-white/20" aria-label="Open feature drawer" aria-controls="feature-drawer" aria-expanded="false">
+                            <?php echo iconSvg('menu', 'w-5 h-5'); ?>
+                        </button>
                         <div class="w-9 h-9 bg-purple-700 rounded-xl flex items-center justify-center">
                             <?php echo iconSvg('shield', 'w-5 h-5 text-purple-200'); ?>
                         </div>
@@ -776,21 +946,42 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                 </div>
             </div>
 
-            <!-- DESKTOP TABS -->
-            <div class="hidden sm:flex px-4 gap-1 overflow-x-auto pb-0.5">
-                <?php foreach ($tabLabelMap as $key => $label): ?>
-                    <?php $active = $tab === $key;
-                    $icon = $tabIconMap[$key]; ?>
-                    <a href="<?php echo esc(tabUrl($key)); ?>" class="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-t-lg transition-all whitespace-nowrap flex-shrink-0 <?php echo $active ? 'bg-white text-purple-800' : 'text-purple-200 hover:bg-white/10'; ?>">
-                        <?php echo iconSvg($icon, 'w-3.5 h-3.5'); ?>
-                        <?php echo esc($label); ?>
-                    </a>
-                <?php endforeach; ?>
-            </div>
         </header>
 
+        <div data-drawer-backdrop class="feature-drawer-backdrop fixed inset-0 z-50 bg-slate-950/40" aria-hidden="true"></div>
+        <aside id="feature-drawer" data-feature-drawer class="feature-drawer fixed inset-y-0 left-0 z-[60] flex w-[88vw] max-w-sm flex-col border-r border-gray-200 bg-white shadow-2xl" aria-label="RHU Admin features" aria-hidden="true">
+            <div class="flex items-center justify-between border-b border-gray-100 p-4">
+                <div class="flex items-center gap-3">
+                    <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-700 text-white"><?php echo iconSvg('shield', 'w-5 h-5'); ?></span>
+                    <div><p class="font-bold text-gray-900">Admin Features</p><p class="text-xs text-gray-500"><?php echo esc($tabLabelMap[$tab] ?? 'Dashboard'); ?></p></div>
+                </div>
+                <button type="button" data-drawer-close class="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 text-gray-600 hover:shadow-sm" aria-label="Close feature drawer"><?php echo iconSvg('close', 'w-5 h-5'); ?></button>
+            </div>
+            <nav class="flex-1 overflow-y-auto p-3">
+                <?php foreach ($drawerGroups as $groupLabel => $groupTabs): ?>
+                    <section class="mb-4">
+                        <h2 class="mb-1.5 px-3 text-[10px] font-black uppercase tracking-[0.16em] text-gray-400"><?php echo esc($groupLabel); ?></h2>
+                        <div class="space-y-1">
+                            <?php foreach ($groupTabs as $key): ?>
+                                <?php $active = $tab === $key; ?>
+                                <a href="<?php echo esc(tabUrl($key)); ?>" class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold <?php echo $active ? 'bg-purple-100 text-purple-900 shadow-sm' : 'text-gray-700 hover:bg-gray-50'; ?>" <?php echo $active ? 'aria-current="page"' : ''; ?>>
+                                    <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg <?php echo $active ? 'bg-purple-700 text-white' : 'bg-gray-100 text-gray-600'; ?>"><?php echo iconSvg($tabIconMap[$key], 'w-4 h-4'); ?></span>
+                                    <span class="flex-1"><?php echo esc($tabLabelMap[$key]); ?></span>
+                                    <?php if ($active): ?><span aria-hidden="true"><?php echo iconSvg('right', 'w-3.5 h-3.5'); ?></span><?php endif; ?>
+                                </a>
+                            <?php endforeach; ?>
+                        </div>
+                    </section>
+                <?php endforeach; ?>
+            </nav>
+            <div class="border-t border-gray-100 p-3">
+                <a href="RHUDashboard.php" class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50"><span class="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100"><?php echo iconSvg('stethoscope', 'w-4 h-4'); ?></span>Clinical Dashboard</a>
+                <a href="RHUAdminDashboard.php?logout=1" class="mt-1 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50"><span class="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100"><?php echo iconSvg('logout', 'w-4 h-4'); ?></span>Sign Out</a>
+            </div>
+        </aside>
+
         <!-- MAIN CONTENT AREA -->
-        <main class="flex-1 max-w-7xl mx-auto w-full px-3 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-5 pb-28 sm:pb-6">
+        <main class="flex-1 max-w-7xl mx-auto w-full px-3 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-5 pb-6">
             <?php if ($flashSuccess): ?>
                 <div class="rounded-xl border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-800 flex items-center justify-between shadow-sm">
                     <span>✓ <?php echo esc($flashSuccess); ?></span>
@@ -878,7 +1069,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                                                             </form>
                                                         </div>
                                                     <?php else: ?>
-                                                        <span class="text-[11px] text-gray-400 font-mono"><?php echo esc($cert['certificate_number'] ?? 'Processed'); ?></span>
+                                                        <a href="?certificate_pdf=<?php echo (int)$cert['id']; ?>" class="text-[11px] font-bold text-purple-700">Download PDF</a>
                                                     <?php endif; ?>
                                                 </td>
                                             </tr>
@@ -969,6 +1160,23 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                                 </table>
                             </div>
                         <?php endif; ?>
+                        <details class="mt-4 rounded border p-3"><summary class="cursor-pointer text-xs font-bold">Edit or cancel a published event</summary><div class="mt-3 space-y-2"><?php
+                            $publishedEvents = $pdo->query("SELECT id,title,scheduled_date,start_time,venue,description,capacity,status FROM portal_events ORDER BY scheduled_date DESC")->fetchAll(PDO::FETCH_ASSOC);
+                            foreach ($publishedEvents as $publishedEvent): ?>
+                            <form method="post" class="grid gap-1 border-t pt-2 text-xs sm:grid-cols-6">
+                                <input type="hidden" name="action" value="save_event"><input type="hidden" name="event_id" value="<?php echo (int)$publishedEvent['id']; ?>">
+                                <input name="title" value="<?php echo esc($publishedEvent['title']); ?>" class="rounded border p-1">
+                                <input type="date" name="scheduled_date" value="<?php echo esc($publishedEvent['scheduled_date']); ?>" class="rounded border p-1">
+                                <input type="time" name="start_time" value="<?php echo esc($publishedEvent['start_time']); ?>" class="rounded border p-1">
+                                <input name="venue" value="<?php echo esc($publishedEvent['venue']); ?>" class="rounded border p-1">
+                                <input name="description" value="<?php echo esc($publishedEvent['description']); ?>" class="rounded border p-1">
+                                <input type="number" name="capacity" value="<?php echo esc($publishedEvent['capacity']); ?>" class="rounded border p-1">
+                                <select name="status" class="rounded border p-1"><option>Scheduled</option><option>Cancelled</option><option>Completed</option></select>
+                                <button class="rounded bg-indigo-700 p-1 text-white">Save</button>
+                            </form>
+                            <form method="post" onsubmit="return confirm('Delete this event?')" class="mt-1"><input type="hidden" name="action" value="delete_event"><input type="hidden" name="event_id" value="<?php echo (int)$publishedEvent['id']; ?>"><button class="text-xs font-bold text-red-700">Delete <?php echo esc($publishedEvent['title']); ?></button></form>
+                            <?php endforeach; ?>
+                        </div></details>
                     </div>
             <?php endif; ?>
 
@@ -1037,6 +1245,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
 
             <!-- STAFF ACCOUNTS TAB -->
             <?php if ($tab === 'staff'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'staff'); ?>
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('stethoscope', 'w-5 h-5 text-emerald-600'); ?> Healthcare Staff Registry</h2>
@@ -1122,6 +1331,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
 
             <!-- RESIDENT REGISTRY TAB -->
             <?php if ($tab === 'residents'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'residents'); ?>
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('check', 'w-5 h-5 text-teal-600'); ?> Municipal Resident Registry</h2>
@@ -1195,7 +1405,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
                                             <td class="px-3 py-2.5 text-gray-700"><?php echo esc(substr($csl['chief_complaint'] ?? '', 0, 30)); ?></td>
                                             <td class="px-3 py-2.5 text-gray-700"><?php echo esc($csl['diagnosis'] ?? 'N/A'); ?></td>
                                             <td class="px-3 py-2.5 text-gray-500"><?php echo esc(date('M d, Y', strtotime($csl['consultation_date']))); ?></td>
-                                            <td class="px-3 py-2.5"><form method="post" class="flex min-w-[420px] gap-1"><input type="hidden" name="action" value="update_consultation"><input type="hidden" name="consultation_id" value="<?php echo (int)$csl['id']; ?>"><input name="diagnosis" value="<?php echo esc($csl['diagnosis'] ?? ''); ?>" placeholder="Diagnosis" class="w-28 rounded border p-1"><input name="treatment_plan" placeholder="Treatment plan" class="w-32 rounded border p-1"><input type="date" name="follow_up_date" class="rounded border p-1"><button class="rounded bg-blue-600 px-2 text-white">Save</button></form></td>
+                                            <td class="px-3 py-2.5"><form method="post" class="flex min-w-[620px] gap-1"><input type="hidden" name="action" value="update_consultation"><input type="hidden" name="consultation_id" value="<?php echo (int)$csl['id']; ?>"><input name="diagnosis" value="<?php echo esc($csl['diagnosis'] ?? ''); ?>" placeholder="Diagnosis" class="w-28 rounded border p-1"><input name="treatment_plan" placeholder="Treatment plan" class="w-32 rounded border p-1"><input type="date" name="follow_up_date" class="rounded border p-1"><select name="physician_id" class="rounded border p-1"><?php foreach ($dbStaffList as $provider): ?><option value="<?php echo (int)$provider['id']; ?>" <?php echo (int)$csl['physician_id'] === (int)$provider['id'] ? 'selected' : ''; ?>><?php echo esc($provider['first_name'] . ' ' . $provider['last_name']); ?></option><?php endforeach; ?></select><select name="consultation_status" class="rounded border p-1"><option>Scheduled</option><option>In Progress</option><option>Completed</option><option>Cancelled</option><option>Referred</option></select><button class="rounded bg-blue-600 px-2 text-white">Save</button></form></td>
                                         </tr>
                                     <?php endforeach; ?>
                                 </tbody>
@@ -1210,6 +1420,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
 
             <!-- MATERNAL HEALTH TAB -->
             <?php if ($tab === 'maternal'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'maternal'); ?>
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('baby', 'w-5 h-5 text-pink-600'); ?> Maternal Health Cases</h2>
@@ -1255,6 +1466,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
 
             <!-- IMMUNIZATION TAB -->
             <?php if ($tab === 'vaccination'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'vaccination'); ?>
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('shield', 'w-5 h-5 text-emerald-600'); ?> Immunization Records</h2>
@@ -1296,6 +1508,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
 
             <!-- DISEASE SURVEILLANCE TAB -->
             <?php if ($tab === 'disease'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'disease'); ?>
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('alert', 'w-5 h-5 text-red-600'); ?> Disease Surveillance</h2>
@@ -1341,6 +1554,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
 
             <!-- MEDICINE INVENTORY TAB -->
             <?php if ($tab === 'medicine'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'medicine'); ?>
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('pill', 'w-5 h-5 text-orange-600'); ?> Medicine Inventory</h2>
@@ -1398,6 +1612,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
 
             <!-- VITAL STATISTICS TAB -->
             <?php if ($tab === 'vital'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'vital'); ?>
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('file', 'w-5 h-5 text-purple-600'); ?> Vital Statistics</h2>
@@ -1477,6 +1692,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
 
             <!-- REPORTS & ANALYTICS TAB -->
             <?php if ($tab === 'reports'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'reports'); ?>
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex items-center justify-between"><h2 class="text-base sm:text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('bar', 'w-5 h-5 text-purple-600'); ?> Database Analytics & Reports</h2><a href="?tab=reports&amp;export=summary" class="rounded-lg bg-purple-700 px-4 py-2 text-xs font-bold text-white">Export CSV Summary</a></div>
                     <div class="grid md:grid-cols-2 gap-4">
@@ -1505,6 +1721,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
 
             <!-- RE-DESIGNED SYSTEM SETTINGS TAB -->
             <?php if ($tab === 'system'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'system'); ?>
                 <div class="space-y-6">
                     <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-4">
                         <div>
@@ -1654,6 +1871,7 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
 
             <!-- RE-DESIGNED SECURITY TAB -->
             <?php if ($tab === 'security'): ?>
+                <?php renderAdminExtendedPanel($pdo, 'security'); ?>
                 <div class="space-y-6">
                     <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-4">
                         <div>
@@ -1776,6 +1994,9 @@ function renderMetricCard(string $label, mixed $value, string $sub, string $icon
             <?php endif; ?>
         </main>
     </div>
+<button type="button" class="scroll-top-button fixed bottom-20 right-4 z-30 flex h-11 w-11 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-700 shadow-xl sm:bottom-6 sm:right-6" aria-label="Back to top" title="Back to top">
+    <span aria-hidden="true">↑</span>
+</button>
 <script>
 document.querySelectorAll('form[method="post"], form[method="POST"]').forEach((form) => {
     if (form.querySelector('input[name="csrf_token"]')) return;
@@ -1784,6 +2005,99 @@ document.querySelectorAll('form[method="post"], form[method="POST"]').forEach((f
     input.name = 'csrf_token';
     input.value = <?php echo json_encode(portalCsrfToken(), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
     form.prepend(input);
+});
+
+const featureDrawer = document.querySelector('[data-feature-drawer]');
+const drawerBackdrop = document.querySelector('[data-drawer-backdrop]');
+const drawerOpenButton = document.querySelector('[data-drawer-open]');
+const drawerCloseButton = document.querySelector('[data-drawer-close]');
+let drawerReturnFocus = null;
+const setDrawerOpen = (open) => {
+    featureDrawer?.classList.toggle('is-open', open);
+    drawerBackdrop?.classList.toggle('is-open', open);
+    document.body.classList.toggle('drawer-open', open);
+    featureDrawer?.setAttribute('aria-hidden', String(!open));
+    drawerBackdrop?.setAttribute('aria-hidden', String(!open));
+    drawerOpenButton?.setAttribute('aria-expanded', String(open));
+    if (open) {
+        drawerReturnFocus = document.activeElement;
+        window.setTimeout(() => drawerCloseButton?.focus(), 120);
+    } else if (drawerReturnFocus instanceof HTMLElement) {
+        drawerReturnFocus.focus();
+    }
+};
+drawerOpenButton?.addEventListener('click', () => setDrawerOpen(true));
+drawerCloseButton?.addEventListener('click', () => setDrawerOpen(false));
+drawerBackdrop?.addEventListener('click', () => setDrawerOpen(false));
+document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && featureDrawer?.classList.contains('is-open')) setDrawerOpen(false);
+});
+
+document.querySelectorAll('table').forEach((table, tableIndex) => {
+    const body = table.tBodies[0];
+    if (!body || body.rows.length < 5) return;
+    const rows = Array.from(body.rows);
+    const pageSize = 15;
+    let page = 1;
+    let query = '';
+    const toolbar = document.createElement('div');
+    toolbar.className = 'flex items-center justify-between gap-2 border-b bg-gray-50 p-2 text-xs';
+    toolbar.innerHTML = `<input aria-label="Search table" class="w-full max-w-xs rounded border p-2" placeholder="Search these records…"><span class="whitespace-nowrap"></span><div class="flex gap-1"><button type="button" class="rounded border bg-white px-2 py-1">Previous</button><button type="button" class="rounded border bg-white px-2 py-1">Next</button></div>`;
+    table.parentElement.insertBefore(toolbar, table);
+    const input = toolbar.querySelector('input');
+    const status = toolbar.querySelector('span');
+    const [previous, next] = toolbar.querySelectorAll('button');
+    const render = () => {
+        const matching = rows.filter(row => row.textContent.toLowerCase().includes(query));
+        const pages = Math.max(1, Math.ceil(matching.length / pageSize));
+        page = Math.min(page, pages);
+        rows.forEach(row => row.hidden = true);
+        matching.slice((page - 1) * pageSize, page * pageSize).forEach(row => row.hidden = false);
+        status.textContent = `${matching.length} records · Page ${page}/${pages}`;
+        previous.disabled = page <= 1;
+        next.disabled = page >= pages;
+    };
+    input.addEventListener('input', () => { query = input.value.trim().toLowerCase(); page = 1; render(); });
+    previous.addEventListener('click', () => { page--; render(); });
+    next.addEventListener('click', () => { page++; render(); });
+    render();
+});
+
+const dashboardHeader = document.querySelector('.dashboard-header');
+const scrollTopButton = document.querySelector('.scroll-top-button');
+const updateScrollEffects = () => {
+    const scrolled = window.scrollY > 18;
+    dashboardHeader?.classList.toggle('is-scrolled', scrolled);
+    scrollTopButton?.classList.toggle('is-visible', window.scrollY > 420);
+};
+window.addEventListener('scroll', updateScrollEffects, { passive: true });
+updateScrollEffects();
+scrollTopButton?.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+
+const revealTargets = new Set([
+    ...document.querySelectorAll('main > div > div, main > div > section, main .grid > .bg-white, main details')
+]);
+revealTargets.forEach((element, index) => {
+    element.dataset.scrollReveal = '';
+    element.style.setProperty('--reveal-delay', `${Math.min(index % 5, 4) * 55}ms`);
+});
+
+if ('IntersectionObserver' in window && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const revealObserver = new IntersectionObserver((entries, observer) => {
+        entries.forEach(entry => {
+            if (!entry.isIntersecting) return;
+            entry.target.classList.add('is-visible');
+            observer.unobserve(entry.target);
+        });
+    }, { threshold: 0.08, rootMargin: '0px 0px -36px 0px' });
+    revealTargets.forEach(element => revealObserver.observe(element));
+} else {
+    revealTargets.forEach(element => element.classList.add('is-visible'));
+}
+
+document.querySelectorAll('main .text-2xl.font-black').forEach((value, index) => {
+    value.classList.add('metric-value-pop');
+    value.style.animationDelay = `${Math.min(index, 8) * 45}ms`;
 });
 </script>
 </body>
