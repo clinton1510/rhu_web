@@ -2,6 +2,7 @@
 if (session_status() === PHP_SESSION_NONE) session_start();
 @include_once __DIR__ . '/db.php';
 require_once __DIR__ . '/portal.php';
+@include_once __DIR__ . '/mailer.php';
 if (!empty($_SESSION['rhu_staff_login']) || !empty($_SESSION['bhw_user'])) {
     // Remove stale elevated authorization left by a previous browser login.
     unset($_SESSION['rhu_admin_authenticated'], $_SESSION['user']);
@@ -32,56 +33,60 @@ if (!function_exists('dashboardUrl')) {
 if (!function_exists('iconSvg')) {
     function iconSvg(string $name, string $class = 'w-5 h-5'): string
     {
-    $icons = [
-        'home' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>',
-        'stethoscope' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v7a6 6 0 0 0 12 0V3"/><path d="M6 10a3 3 0 0 0 6 0"/><path d="M12 20a4 4 0 0 0 8 0v-2"/></svg>',
-        'clipboard' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>',
-        'droplets' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C8 6 5 9.5 5 13.5a7 7 0 0 0 14 0C19 9.5 16 6 12 2z"/></svg>',
-        'users' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
-        'activity' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
-        'calendar' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
-        'syringe' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M16 8l6-6"/><path d="M2 22l5-5 5 5"/><path d="M7 17l3 3"/></svg>',
-        'send' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>',
-        'testtube' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2h8v4H8z"/><path d="M8 6v6a4 4 0 1 0 8 0V6"/><path d="M12 14v6"/></svg>',
-        'baby' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a8 8 0 0 1-8-8V7a4 4 0 0 1 8 0v7a8 8 0 0 1-8 8"/><path d="M12 2v4"/></svg>',
-        'heart' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 22l7.8-8.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>',
-        'microscope' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 20h12"/><path d="M10 14l2 2 2-2"/><path d="M7 8c0-2.5 2-5 5-5s5 2.5 5 5"/><path d="M7 8l4 4"/><path d="M17 18c0-1.1-.9-2-2-2"/></svg>',
-        'scale' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4"/><path d="M4 7h16"/><path d="M6 21h12"/><path d="M12 7c-2 0-4 2-4 4v4h8v-4c0-2-2-4-4-4z"/></svg>',
-        'shield' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
-        'file' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>',
-        'pill' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15L4.5 19.5a4.5 4.5 0 0 0 6.36 6.36L15 21"/><path d="M9 15l6-6"/><path d="M15 9L19.5 4.5A4.5 4.5 0 0 0 13.14-1.86L9 3"/></svg>',
-        'usercheck' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M17 11l2 2 4-4"/></svg>',
-        'bar' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="14"/></svg>',
-        'trend' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>',
-        'bell' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
-        'logout' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',
-        'search' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
-        'plus' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
-        'x' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
-        'alert' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
-        'check' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
-        'download' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
-        'refresh' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',
-        'eye' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>',
-        'edit' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>',
-        'printer' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8" rx="2"/></svg>',
-        'right' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 18l6-6-6-6"/></svg>',
-        'phone' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.18 2 2 0 0 1 4.09 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.77.6 2.6a2 2 0 0 1-.45 2.11L8 9a16 16 0 0 0 7 7l.57-1.24a2 2 0 0 1 2.11-.45c.83.27 1.7.48 2.6.6A2 2 0 0 1 22 16.92z"/></svg>',
-        'mail' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><polyline points="4 4 12 13 20 4"/></svg>',
-        'map' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5 9 4l6 2 6-2v15l-6 2-6-2-6 2z"/><path d="M9 4v15"/><path d="M15 6v15"/></svg>',
-        'package' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73L13 2.27a2 2 0 0 0-2 0L4 6.27A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 3.72a2 2 0 0 0 2 0l7-3.72A2 2 0 0 0 21 16z"/><path d="M7 9h10"/><path d="M7 15h10"/></svg>',
-        'book' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 7H20v14H6.5A2.5 2.5 0 0 1 4 18.5V4.5z"/></svg>',
-        'filecheck' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 16l2 2 4-4"/></svg>',
-    ];
+        $icons = [
+            'home' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>',
+            'stethoscope' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v7a6 6 0 0 0 12 0V3"/><path d="M6 10a3 3 0 0 0 6 0"/><path d="M12 20a4 4 0 0 0 8 0v-2"/></svg>',
+            'clipboard' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>',
+            'droplets' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C8 6 5 9.5 5 13.5a7 7 0 0 0 14 0C19 9.5 16 6 12 2z"/></svg>',
+            'users' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+            'activity' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
+            'calendar' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
+            'syringe' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M16 8l6-6"/><path d="M2 22l5-5 5 5"/><path d="M7 17l3 3"/></svg>',
+            'send' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>',
+            'testtube' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2h8v4H8z"/><path d="M8 6v6a4 4 0 1 0 8 0V6"/><path d="M12 14v6"/></svg>',
+            'baby' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a8 8 0 0 1-8-8V7a4 4 0 0 1 8 0v7a8 8 0 0 1-8 8"/><path d="M12 2v4"/></svg>',
+            'heart' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 22l7.8-8.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>',
+            'microscope' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 20h12"/><path d="M10 14l2 2 2-2"/><path d="M7 8c0-2.5 2-5 5-5s5 2.5 5 5"/><path d="M7 8l4 4"/><path d="M17 18c0-1.1-.9-2-2-2"/></svg>',
+            'scale' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4"/><path d="M4 7h16"/><path d="M6 21h12"/><path d="M12 7c-2 0-4 2-4 4v4h8v-4c0-2-2-4-4-4z"/></svg>',
+            'shield' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+            'file' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>',
+            'pill' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15L4.5 19.5a4.5 4.5 0 0 0 6.36 6.36L15 21"/><path d="M9 15l6-6"/><path d="M15 9L19.5 4.5A4.5 4.5 0 0 0 13.14-1.86L9 3"/></svg>',
+            'usercheck' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M17 11l2 2 4-4"/></svg>',
+            'bar' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="18" y1="20" x2="18" y2="14"/></svg>',
+            'trend' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>',
+            'bell' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
+            'logout' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',
+            'search' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+            'plus' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+            'x' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+            'alert' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+            'check' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
+            'download' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+            'refresh' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',
+            'eye' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>',
+            'edit' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>',
+            'printer' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8" rx="2"/></svg>',
+            'right' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 18l6-6-6-6"/></svg>',
+            'phone' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.18 2 2 0 0 1 4.09 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.77.6 2.6a2 2 0 0 1-.45 2.11L8 9a16 16 0 0 0 7 7l.57-1.24a2 2 0 0 1 2.11-.45c.83.27 1.7.48 2.6.6A2 2 0 0 1 22 16.92z"/></svg>',
+            'mail' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><polyline points="4 4 12 13 20 4"/></svg>',
+            'map' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5 9 4l6 2 6-2v15l-6 2-6-2-6 2z"/><path d="M9 4v15"/><path d="M15 6v15"/></svg>',
+            'package' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73L13 2.27a2 2 0 0 0-2 0L4 6.27A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 3.72a2 2 0 0 0 2 0l7-3.72A2 2 0 0 0 21 16z"/><path d="M7 9h10"/><path d="M7 15h10"/></svg>',
+            'book' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 7H20v14H6.5A2.5 2.5 0 0 1 4 18.5V4.5z"/></svg>',
+            'filecheck' => '<svg class="' . $class . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 16l2 2 4-4"/></svg>',
+        ];
 
-    return $icons[$name] ?? '';
-}
+        return $icons[$name] ?? '';
+    }
 }
 
 if (!function_exists('formatDate')) {
-    function formatDate(string $date): string
+    function formatDate(?string $date): string
     {
-        return date('F j, Y', strtotime($date));
+        if (empty($date)) {
+            return '';
+        }
+        $time = strtotime($date);
+        return $time !== false ? date('F j, Y', $time) : $date;
     }
 }
 
@@ -286,6 +291,7 @@ $mockDemandForecast = [];
 $weeklyOPDData = [];
 $diagnosisData = [];
 $monthlyBloodData = [];
+$dbBarangays = ['Aga', 'Anilao', 'Balaytigue', 'Balibago', 'Banilad', 'Barangay 1 (Pob.)', 'Barangay 2 (Pob.)', 'Barangay 3 (Pob.)', 'Barangay 4 (Pob.)', 'Bilaran', 'Bucana', 'Bulihan', 'Calayo', 'Catandaan', 'Cogunan', 'Dayap', 'Halang', 'Kaylaway', 'Looc', 'Lumbangan', 'Mabini', 'Nagsabaran', 'Natipuan', 'Pantalan', 'Poblacion', 'Wawa'];
 
 $totalInventory = 0;
 foreach ($mockRHUInventory as $item) {
@@ -363,9 +369,17 @@ if (!empty($pdo)) {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
         );
 
+        try {
+            $fetchedBarangays = $pdo->query("SELECT name FROM barangays ORDER BY name ASC")->fetchAll(PDO::FETCH_COLUMN) ?: [];
+            if (!empty($fetchedBarangays)) {
+                $dbBarangays = $fetchedBarangays;
+            }
+        } catch (PDOException $eBrgy) {
+            error_log('Barangay query error: ' . $eBrgy->getMessage());
+        }
         $allResidents = $pdo->query("SELECT id, CONCAT(first_name, ' ', last_name) as name, barangay FROM residents ORDER BY first_name ASC")->fetchAll(PDO::FETCH_ASSOC) ?: [];
         $RHU_INFO['totalPopulation'] = count($allResidents);
-        $RHU_INFO['catchmentBarangays'] = array_values(array_unique(array_filter(array_column($allResidents, 'barangay'))));
+        $RHU_INFO['catchmentBarangays'] = $dbBarangays;
         $allVaccines = $pdo->query("SELECT id, vaccine_name, age_group FROM immunization_schedules ORDER BY vaccine_name ASC")->fetchAll(PDO::FETCH_ASSOC) ?: [];
         $allCertTypes = $pdo->query("SELECT id, certificate_type_name FROM certificate_types ORDER BY certificate_type_name ASC")->fetchAll(PDO::FETCH_ASSOC) ?: [];
         $allStaff = $pdo->query("SELECT s.id, CONCAT(u.first_name, ' ', u.last_name) as name, s.staff_type FROM staff s JOIN users u ON s.user_id = u.id ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC) ?: [];
@@ -397,32 +411,66 @@ if (!empty($pdo)) {
                 'id' => (int)$notification['id'],
                 'title' => 'RHU Notification',
                 'message' => $notification['message'],
-                'time' => date('M j, Y g:i A', strtotime($notification['created_at'])),
+                'time' => !empty($notification['created_at']) ? date('M j, Y g:i A', strtotime($notification['created_at'])) : '',
                 'unread' => !(bool)$notification['is_read'],
                 'type' => 'information',
             ];
         }
 
-        // 1. OPD Consultations (consultations + residents + staff + users)
-        $dbOpdStmt = $pdo->query("SELECT c.id, CONCAT(r.first_name, ' ', r.last_name) AS patientName, TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) as age, r.gender, c.chief_complaint as chiefComplaint, c.diagnosis, c.icd_code as icd10, c.medications_prescribed as medications, r.barangay, r.philhealth_id, c.consultation_date as date, c.consultation_status, c.referral_needed, CONCAT(doc_u.first_name, ' ', doc_u.last_name) as physicianName FROM consultations c JOIN residents r ON c.resident_id = r.id LEFT JOIN staff doc_s ON c.physician_id = doc_s.id LEFT JOIN users doc_u ON doc_s.user_id = doc_u.id ORDER BY c.id DESC");
+        // 1. OPD Consultations (Filtered by assigned staff if logged in as staff)
+        $loggedInStaffId = (int)($_SESSION['rhu_staff_login']['staff_id'] ?? 0);
+        $loggedInUserId = (int)($_SESSION['rhu_staff_login']['id'] ?? 0);
+
+        $whereClause = "";
+        $queryParams = [];
+        if ($loggedInStaffId > 0 && empty($_SESSION['rhu_admin_authenticated'])) {
+            $whereClause = "WHERE (c.physician_id = :sid OR doc_s.user_id = :uid)";
+            $queryParams = ['sid' => $loggedInStaffId, 'uid' => $loggedInUserId];
+        }
+
+        $dbOpdStmt = $pdo->prepare("
+            SELECT c.id, c.physician_id,
+                   CONCAT(r.first_name, ' ', r.last_name) AS patientName,
+                   r.contact_number, r.email,
+                   TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) as age, r.gender,
+                   c.chief_complaint as chiefComplaint, c.diagnosis, c.icd_code as icd10,
+                   c.medications_prescribed as medications, c.consultation_notes as notes,
+                   r.barangay, r.philhealth_id, c.consultation_date as date,
+                   c.consultation_status, c.referral_needed,
+                   CONCAT(doc_u.first_name, ' ', doc_u.last_name) as physicianName,
+                   doc_s.staff_type as physicianType
+            FROM consultations c
+            JOIN residents r ON c.resident_id = r.id
+            LEFT JOIN staff doc_s ON c.physician_id = doc_s.id
+            LEFT JOIN users doc_u ON doc_s.user_id = doc_u.id
+            {$whereClause}
+            ORDER BY c.id DESC
+        ");
+        $dbOpdStmt->execute($queryParams);
         $dbOpd = $dbOpdStmt->fetchAll(PDO::FETCH_ASSOC);
         if (!empty($dbOpd)) {
             $formattedOpd = [];
             foreach ($dbOpd as $co) {
+                $docName = trim((string)$co['physicianName']);
+                $docType = trim((string)$co['physicianType']);
+                $displayDoc = $docName ? ($docType ? "{$docName} ({$docType})" : $docName) : 'RHU Staff On-Duty';
+
                 $formattedOpd[] = [
                     'id' => 'C-' . $co['id'],
+                    'physicianId' => (int)$co['physician_id'],
                     'patientName' => $co['patientName'],
                     'age' => $co['age'] === null ? null : (int)$co['age'],
                     'gender' => substr($co['gender'] ?: 'F', 0, 1),
-                    'diagnosis' => $co['diagnosis'] ?: 'Not recorded',
+                    'diagnosis' => $co['diagnosis'] ?: 'Pending Evaluation',
                     'barangay' => $co['barangay'] ?: 'Not recorded',
-                    'physician' => trim((string)$co['physicianName']) ?: 'Not assigned',
+                    'physician' => $displayDoc,
                     'date' => $co['date'],
-                    'disposition' => !empty($co['referral_needed']) ? 'referred' : strtolower((string)($co['consultation_status'] ?: 'not recorded')),
+                    'disposition' => !empty($co['referral_needed']) ? 'referred' : strtolower((string)($co['consultation_status'] ?: 'pending')),
                     'philhealthCharged' => !empty($co['philhealth_id']),
                     'vitals' => ['bp' => 'Not recorded', 'temp' => 'Not recorded', 'weight' => 'Not recorded', 'rr' => 'Not recorded', 'hr' => 'Not recorded'],
-                    'chiefComplaint' => $co['chiefComplaint'] ?: 'Not recorded',
+                    'chiefComplaint' => $co['chiefComplaint'] ?: 'General Health Checkup',
                     'icd10' => $co['icd10'] ?: 'Not recorded',
+                    'notes' => $co['notes'] ?: '',
                     'medications' => array_filter(array_map('trim', explode(',', (string)$co['medications'])))
                 ];
             }
@@ -486,8 +534,8 @@ if (!empty($pdo)) {
                     'supporter' => trim((string)$tb['providerName']) ?: 'Not assigned',
                     'outcome' => strtolower($tb['outcome']) === 'ongoing' || strtolower($tb['outcome']) === 'active' ? 'on_treatment' : 'cured',
                     'caseType' => 'Not recorded',
-                    'phase' => $tb['treatmentStartDate'] && strtotime($tb['treatmentStartDate']) > strtotime('-2 months') ? 'Intensive' : 'Continuation',
-                    'monthsCompleted' => $tb['treatmentStartDate'] ? max(0, (int)floor((time() - strtotime($tb['treatmentStartDate'])) / 2592000)) : 0,
+                    'phase' => !empty($tb['treatmentStartDate']) && strtotime($tb['treatmentStartDate']) > strtotime('-2 months') ? 'Intensive' : 'Continuation',
+                    'monthsCompleted' => !empty($tb['treatmentStartDate']) ? max(0, (int)floor((time() - strtotime($tb['treatmentStartDate'])) / 2592000)) : 0,
                     'totalMonths' => 6,
                     'adherence' => (int)$tb['totalDoses'] > 0 ? round((((int)$tb['totalDoses'] - (int)$tb['missedDoses']) / (int)$tb['totalDoses']) * 100) : 0,
                     'treatmentRegimen' => 'Not recorded',
@@ -527,7 +575,7 @@ if (!empty($pdo)) {
                     'barangay' => $pm['barangay'] ?: 'Not recorded',
                     'gravida' => null,
                     'para' => null,
-                    'aog' => $pm['lmp'] ? max(0, (int)floor((time() - strtotime($pm['lmp'])) / 604800)) . ' wks' : 'Not recorded',
+                    'aog' => !empty($pm['lmp']) ? max(0, (int)floor((time() - strtotime($pm['lmp'])) / 604800)) . ' wks' : 'Not recorded',
                     'lmp' => $pm['lmp'],
                     'edc' => $pm['edc'],
                     'bloodType' => $pm['bloodType'] ?: 'Not recorded',
@@ -582,7 +630,7 @@ if (!empty($pdo)) {
                     'id' => 'DS-' . $dc['id'],
                     'disease' => $dc['disease'],
                     'icd10' => $dc['icd10'] ?: 'Not recorded',
-                    'reportingWeek' => $dc['case_date'] ? date('o-\WW', strtotime($dc['case_date'])) : 'Not recorded',
+                    'reportingWeek' => !empty($dc['case_date']) ? date('o-\WW', strtotime($dc['case_date'])) : 'Not recorded',
                     'cases' => 1,
                     'deaths' => strtolower($dc['outcome']) === 'deceased' ? 1 : 0,
                     'barangays' => [$dc['barangay'] ?: 'Not recorded'],
@@ -686,41 +734,85 @@ if (!empty($pdo)) {
             $mockHealthCertificates = $formattedCerts;
         }
 
-        // 11. Staff Accounts (staff + users)
-        $dbStaffStmt = $pdo->query("SELECT s.id, CONCAT(u.first_name, ' ', u.last_name) AS name, s.staff_type as position, u.email, s.license_number as licenseNo, s.license_expiry, s.is_active FROM staff s JOIN users u ON s.user_id = u.id ORDER BY s.id DESC");
+        // 11. Staff Accounts (staff + users + schedules)
+        try {
+            $pdo->exec("ALTER TABLE staff ADD COLUMN work_days VARCHAR(100) DEFAULT 'Monday, Tuesday, Wednesday, Thursday, Friday'");
+            $pdo->exec("ALTER TABLE staff ADD COLUMN shift_start TIME DEFAULT '08:00:00'");
+            $pdo->exec("ALTER TABLE staff ADD COLUMN shift_end TIME DEFAULT '17:00:00'");
+            $pdo->exec("ALTER TABLE staff ADD COLUMN is_on_duty TINYINT(1) DEFAULT 1");
+        } catch (Throwable $tCols) {}
+
+        $dbStaffStmt = $pdo->query("
+            SELECT s.id, CONCAT(u.first_name, ' ', u.last_name) AS name, s.staff_type as position, u.email,
+                   s.license_number as licenseNo, s.license_expiry, s.is_active,
+                   COALESCE(s.work_days, 'Monday, Tuesday, Wednesday, Thursday, Friday') as workDays,
+                   COALESCE(s.shift_start, '08:00:00') as shiftStart,
+                   COALESCE(s.shift_end, '17:00:00') as shiftEnd,
+                   COALESCE(s.is_on_duty, 1) as isOnDuty
+            FROM staff s
+            JOIN users u ON s.user_id = u.id
+            ORDER BY s.id DESC
+        ");
         $dbStaff = $dbStaffStmt->fetchAll(PDO::FETCH_ASSOC);
         if (!empty($dbStaff)) {
             $formattedStaff = [];
             foreach ($dbStaff as $st) {
+                $sStart = !empty($st['shiftStart']) ? date('g:i A', strtotime($st['shiftStart'])) : '8:00 AM';
+                $sEnd = !empty($st['shiftEnd']) ? date('g:i A', strtotime($st['shiftEnd'])) : '5:00 PM';
+
                 $formattedStaff[] = [
                     'id' => 'ST-' . $st['id'],
+                    'staff_id' => (int)$st['id'],
                     'name' => $st['name'],
                     'position' => $st['position'],
                     'email' => $st['email'],
                     'licenseNo' => $st['licenseNo'] ?: 'MD-2026-101',
                     'prcExpiry' => $st['license_expiry'],
-                    'status' => $st['is_active'] ? 'active' : 'inactive'
+                    'status' => $st['is_active'] ? 'active' : 'inactive',
+                    'workDays' => $st['workDays'],
+                    'shiftHours' => "{$sStart} - {$sEnd}",
+                    'rawShiftStart' => $st['shiftStart'],
+                    'rawShiftEnd' => $st['shiftEnd'],
+                    'isOnDuty' => (bool)$st['isOnDuty']
                 ];
             }
             $mockRHUStaff = $formattedStaff;
         }
 
-        // 12. BHWs (bhw + staff + users)
-        $dbBhwStmt = $pdo->query("SELECT b.id as bhw_id, b.staff_id, b.barangay, b.coverage_population as householdsAssigned, b.assigned_date, CONCAT(u.first_name, ' ', u.last_name) AS name, s.phone_number as contactNo, COALESCE(s.is_active, 1) as is_active FROM bhw b LEFT JOIN staff s ON b.staff_id = s.id LEFT JOIN users u ON s.user_id = u.id ORDER BY b.id DESC");
+        if (function_exists('mergeJsonScheduleIntoStaffList')) {
+            $mockRHUStaff = mergeJsonScheduleIntoStaffList($mockRHUStaff, $pdo);
+        }
+
+        // 12. BHWs (strictly from bhw table only)
+        $dbBhwStmt = $pdo->query(
+            "SELECT id as bhw_id, first_name, last_name, email, phone_number as contactNo, barangay,
+                    coverage_population as householdsAssigned, cert_number as certNumber,
+                    COALESCE(is_active, 1) as is_active, assigned_date
+             FROM bhw
+             ORDER BY id DESC"
+        );
         $dbBhw = $dbBhwStmt->fetchAll(PDO::FETCH_ASSOC);
-        if (!empty($dbBhw)) {
+        if ($dbBhw !== false) {
             $formattedBhw = [];
             foreach ($dbBhw as $bh) {
-                $displayName = !empty(trim($bh['name'] ?? '')) ? $bh['name'] : ($bh['barangay'] ? 'BHW Worker (' . $bh['barangay'] . ')' : 'BHW #' . $bh['bhw_id']);
+                $fullName = trim(($bh['first_name'] ?? '') . ' ' . ($bh['last_name'] ?? ''));
+                $displayName = !empty($fullName) ? $fullName : ($bh['barangay'] ? 'BHW Worker (' . $bh['barangay'] . ')' : 'BHW #' . $bh['bhw_id']);
                 $formattedBhw[] = [
+                    'bhw_id' => (int)$bh['bhw_id'],
                     'id' => 'BHW-' . sprintf('%03d', $bh['bhw_id']),
+                    'staff_id' => 0,
+                    'user_id' => 0,
+                    'first_name' => $bh['first_name'] ?? '',
+                    'last_name' => $bh['last_name'] ?? '',
                     'name' => $displayName,
+                    'email' => $bh['email'] ?? '',
                     'barangay' => $bh['barangay'] ?: 'Nasugbu',
                     'contactNo' => $bh['contactNo'] ?: 'Not recorded',
+                    'certNumber' => $bh['certNumber'] ?: 'BHW-' . date('Y') . '-' . sprintf('%03d', $bh['bhw_id']),
                     'activeStatus' => (bool)$bh['is_active'],
                     'donorsReferred' => 0,
                     'householdsAssigned' => (int)($bh['householdsAssigned'] ?? 0),
-                    'trainingLevel' => 'Not recorded',
+                    'trainingLevel' => 'Senior BHW',
                     'lastTraining' => $bh['assigned_date'] ?: date('Y-m-d')
                 ];
             }
@@ -809,7 +901,7 @@ if (!empty($pdo)) {
         )->fetchAll(PDO::FETCH_ASSOC) ?: [];
         foreach ($weeklyRows as $row) {
             $weeklyOPDData[] = [
-                'day' => date('D', strtotime($row['visit_date'])),
+                'day' => !empty($row['visit_date']) ? date('D', strtotime($row['visit_date'])) : '',
                 'consultations' => (int)$row['consultations'],
                 'referred' => (int)$row['referred'],
             ];
@@ -837,13 +929,12 @@ if (!empty($pdo)) {
         )->fetchAll(PDO::FETCH_ASSOC) ?: [];
         foreach ($monthlyReferralRows as $row) {
             $monthlyBloodData[] = [
-                'month' => date('M', strtotime($row['month_key'] . '-01')),
+                'month' => !empty($row['month_key']) ? date('M', strtotime($row['month_key'] . '-01')) : '',
                 'donations' => 0,
                 'transfusions' => 0,
                 'referrals' => (int)$row['referrals'],
             ];
         }
-
     } catch (Exception $ex) {
         error_log("RHUDashboard Full DB Hydration Error: " . $ex->getMessage());
     }
@@ -1269,7 +1360,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
-    // 10. SAVE BHW ACCOUNT
+    // 10. SAVE BHW ACCOUNT (Saves on `bhw` table only & emails Certification Number)
     if ($action === 'save_bhw') {
         $firstName = trim($_POST['first_name'] ?? '');
         $lastName = trim($_POST['last_name'] ?? '');
@@ -1278,81 +1369,74 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $barangay = trim($_POST['barangay'] ?? '');
         $households = (int)($_POST['households'] ?? 50);
         $trainingLevel = trim($_POST['training_level'] ?? 'Junior BHW');
-        $password = $_POST['password'] ?? '';
+        $rawPassword = $_POST['password'] ?? '';
+        $passwordToUse = $rawPassword !== '' ? $rawPassword : 'Bhw@123456';
 
         if (empty($firstName) || empty($lastName) || empty($email) || empty($barangay)) {
             $_SESSION['rhu_error'] = 'Please complete all required fields (First Name, Last Name, Email, Barangay).';
         } else {
-            $insertedId = rand(100, 999);
             if (!empty($pdo)) {
                 try {
-                    $pdo->beginTransaction();
-
-                    // Find or fallback BHW Role ID
-                    $roleId = 2;
+                    // Ensure columns exist on bhw table
                     try {
-                        $rStmt = $pdo->prepare("SELECT id FROM roles WHERE UPPER(name) = 'BHW' LIMIT 1");
-                        $rStmt->execute();
-                        $fetchedRole = $rStmt->fetchColumn();
-                        if ($fetchedRole) {
-                            $roleId = (int)$fetchedRole;
-                        }
-                    } catch (Exception $eRole) {
-                        // ignore and use fallback
-                    }
+                        $pdo->exec("ALTER TABLE bhw ADD COLUMN first_name VARCHAR(100) NULL AFTER staff_id");
+                        $pdo->exec("ALTER TABLE bhw ADD COLUMN last_name VARCHAR(100) NULL AFTER first_name");
+                        $pdo->exec("ALTER TABLE bhw ADD COLUMN email VARCHAR(255) NULL AFTER last_name");
+                        $pdo->exec("ALTER TABLE bhw ADD COLUMN phone_number VARCHAR(20) NULL AFTER email");
+                        $pdo->exec("ALTER TABLE bhw ADD COLUMN cert_number VARCHAR(50) NULL AFTER phone_number");
+                        $pdo->exec("ALTER TABLE bhw ADD COLUMN password_hash VARCHAR(255) NULL AFTER cert_number");
+                        $pdo->exec("ALTER TABLE bhw ADD COLUMN is_active TINYINT(1) DEFAULT 1 AFTER password_hash");
+                    } catch (Throwable $tCol) {}
 
-                    // Generate unique username
-                    $baseUname = strtolower(preg_replace('/[^a-z0-9]/i', '', explode('@', $email)[0]));
-                    $username = $baseUname . rand(10, 99);
-                    $passHash = password_hash($password !== '' ? $password : 'Bhw@123456', PASSWORD_DEFAULT);
+                    // Generate unique BHW Certification Number (used in BHW login process)
+                    $certNumber = 'BHW-BAT-' . date('Y') . '-' . sprintf('%03d', rand(1, 999));
+                    $passHash = password_hash($passwordToUse, PASSWORD_DEFAULT);
 
-                    // Insert User
-                    $uStmt = $pdo->prepare("INSERT INTO users (username, email, password_hash, first_name, last_name, role_id, is_active, created_at) VALUES (:u, :e, :h, :fn, :ln, :r, 1, NOW())");
-                    $uStmt->execute([
-                        'u' => $username,
-                        'e' => $email,
-                        'h' => $passHash,
+                    // Insert directly and exclusively into table `bhw`
+                    $bStmt = $pdo->prepare(
+                        "INSERT INTO bhw (staff_id, first_name, last_name, email, phone_number, cert_number, password_hash, is_active, barangay, coverage_population, coverage_area, assigned_date)
+                         VALUES (0, :fn, :ln, :email, :phone, :cert, :hash, 1, :brgy, :pop, 0.00, CURDATE())"
+                    );
+                    $bStmt->execute([
                         'fn' => $firstName,
                         'ln' => $lastName,
-                        'r' => $roleId
-                    ]);
-                    $userId = (int)$pdo->lastInsertId();
-
-                    // Insert Staff
-                    $sStmt = $pdo->prepare("INSERT INTO staff (user_id, staff_type, license_number, phone_number, address, date_hired, is_active, created_at) VALUES (:uid, 'BHW', :lic, :phone, :brgy, CURDATE(), 1, NOW())");
-                    $licenseNo = 'BHW-' . date('Y') . '-' . sprintf('%03d', rand(1, 999));
-                    $sStmt->execute([
-                        'uid' => $userId,
-                        'lic' => $licenseNo,
+                        'email' => $email,
                         'phone' => $contactNo,
-                        'brgy' => $barangay
+                        'cert' => $certNumber,
+                        'hash' => $passHash,
+                        'brgy' => $barangay,
+                        'pop' => $households
                     ]);
-                    $staffId = (int)$pdo->lastInsertId();
-                    $insertedId = $staffId;
 
-                    // Insert BHW record matching table `bhw` columns: (id, staff_id, barangay, coverage_population, coverage_area, assigned_date)
-                    try {
-                        $bStmt = $pdo->prepare("INSERT INTO bhw (staff_id, barangay, coverage_population, coverage_area, assigned_date) VALUES (:sid, :brgy, :pop, 0.00, CURDATE())");
-                        $bStmt->execute([
-                            'sid' => $staffId,
-                            'brgy' => $barangay,
-                            'pop' => $households
-                        ]);
-                    } catch (Exception $eBhw) {
-                        $bStmt = $pdo->prepare("INSERT INTO bhw (staff_id, barangay, coverage_population, coverage_area, assigned_date) VALUES (:sid, :brgy, :pop, 0.00, CURDATE()) ON DUPLICATE KEY UPDATE staff_id = VALUES(staff_id), coverage_population = VALUES(coverage_population)");
-                        $bStmt->execute([
-                            'sid' => $staffId,
-                            'brgy' => $barangay,
-                            'pop' => $households
-                        ]);
+                    // Email generated BHW Certification Number to the BHW email
+                    $emailSubject = "Your BHW Certification Number & Portal Login Credentials - ResiHUnity RHU";
+                    $emailBody = "
+                    <div style='font-family: Arial, sans-serif; padding: 20px; color: #333; max-width: 600px; border: 1px solid #e2e8f0; border-radius: 12px;'>
+                        <h2 style='color: #0d9488; margin-top: 0;'>Welcome to ResiHUnity BHW Portal</h2>
+                        <p>Hello <strong>" . htmlspecialchars($firstName . ' ' . $lastName) . "</strong>,</p>
+                        <p>Your Barangay Health Worker (BHW) account has been registered for <strong>" . htmlspecialchars($barangay) . "</strong>.</p>
+                        
+                        <div style='background-color: #f0fdf4; border: 1px solid #bbf7d0; padding: 15px; border-radius: 8px; margin: 20px 0;'>
+                            <h3 style='margin-top: 0; color: #166534;'>🔑 Login Credentials & Certification Details</h3>
+                            <p style='margin: 5px 0;'><strong>Assigned Barangay:</strong> " . htmlspecialchars($barangay) . "</p>
+                            <p style='margin: 5px 0;'><strong>BHW Certification Number:</strong> <span style='font-family: monospace; font-size: 16px; background-color: #dcfce7; padding: 2px 6px; border-radius: 4px; color: #15803d; font-weight: bold;'>" . htmlspecialchars($certNumber) . "</span></p>
+                            <p style='margin: 5px 0;'><strong>Registered Email:</strong> " . htmlspecialchars($email) . "</p>
+                            <p style='margin: 5px 0;'><strong>Password:</strong> " . htmlspecialchars($passwordToUse) . "</p>
+                        </div>
+
+                        <p>You can use these credentials to log in to the BHW Portal:</p>
+                        <p><a href='http://localhost/RHU/rhu_web/src/app/components/BHWLogin.php' style='display: inline-block; background-color: #0d9488; color: #fff; padding: 10px 18px; border-radius: 6px; text-decoration: none; font-weight: bold;'>Go to BHW Portal Login</a></p>
+                        <p style='color: #64748b; font-size: 12px; margin-top: 25px;'>Please keep your BHW Certification Number safe. You will need it every time you log in to the BHW Portal.</p>
+                    </div>";
+
+                    $mailResult = function_exists('sendRHUEmail') ? sendRHUEmail($email, $emailSubject, $emailBody) : ['success' => false];
+
+                    if (!empty($mailResult['success'])) {
+                        $_SESSION['rhu_flash'] = "BHW Account for {$firstName} {$lastName} saved to BHW table! Certification Number ({$certNumber}) emailed to {$email}.";
+                    } else {
+                        $_SESSION['rhu_flash'] = "BHW Account for {$firstName} {$lastName} saved to BHW table! Certification Number: {$certNumber}.";
                     }
-
-                    $pdo->commit();
-                    $_SESSION['rhu_flash'] = "BHW Account for {$firstName} {$lastName} created and saved to database successfully!";
                 } catch (Exception $e) {
-                    if ($pdo->inTransaction()) {
-                        $pdo->rollBack();
-                    }
                     $_SESSION['rhu_error'] = 'Database error creating BHW account: ' . $e->getMessage();
                 }
             } else {
@@ -1360,6 +1444,224 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
         header('Location: ' . dashboardUrl('bhw'));
+        exit;
+    }
+
+    // 11. UPDATE BHW ACCOUNT (Updates `bhw` table only)
+    if ($action === 'update_bhw') {
+        $bhwId = (int)($_POST['bhw_id'] ?? 0);
+        $firstName = trim($_POST['first_name'] ?? '');
+        $lastName = trim($_POST['last_name'] ?? '');
+        $email = trim($_POST['email'] ?? '');
+        $contactNo = trim($_POST['contact_no'] ?? '');
+        $barangay = trim($_POST['barangay'] ?? '');
+        $households = (int)($_POST['households'] ?? 50);
+        $certNumber = trim($_POST['cert_number'] ?? '');
+        $isActive = isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1;
+
+        if ($bhwId <= 0 || empty($firstName) || empty($lastName) || empty($email) || empty($barangay)) {
+            $_SESSION['rhu_error'] = 'Please complete all required fields for BHW update.';
+        } else {
+            if (!empty($pdo)) {
+                try {
+                    // Update directly in bhw table
+                    $bUpStmt = $pdo->prepare(
+                        "UPDATE bhw 
+                         SET first_name = :fn, last_name = :ln, email = :e, phone_number = :phone, 
+                             barangay = :brgy, coverage_population = :households, cert_number = :cert, is_active = :active 
+                         WHERE id = :bhw_id"
+                    );
+                    $bUpStmt->execute([
+                        'fn' => $firstName,
+                        'ln' => $lastName,
+                        'e' => $email,
+                        'phone' => $contactNo,
+                        'brgy' => $barangay,
+                        'households' => $households,
+                        'cert' => $certNumber,
+                        'active' => $isActive,
+                        'bhw_id' => $bhwId
+                    ]);
+
+                    $_SESSION['rhu_flash'] = "BHW Account for {$firstName} {$lastName} updated successfully in BHW table!";
+                } catch (Exception $e) {
+                    $_SESSION['rhu_error'] = 'Database error updating BHW account: ' . $e->getMessage();
+                }
+            } else {
+                $_SESSION['rhu_error'] = 'Database unavailable. BHW account update failed.';
+            }
+        }
+        header('Location: ' . dashboardUrl('bhw'));
+        exit;
+    }
+
+    // 11.UPDATE STAFF DUTY SCHEDULE
+    if ($action === 'update_staff_schedule') {
+        $staffId = (int)($_POST['staff_id'] ?? 0);
+        $workDays = isset($_POST['work_days']) && is_array($_POST['work_days']) ? implode(', ', $_POST['work_days']) : trim($_POST['work_days_str'] ?? 'Monday, Tuesday, Wednesday, Thursday, Friday');
+        $shiftStart = trim($_POST['shift_start'] ?? '08:00:00');
+        $shiftEnd = trim($_POST['shift_end'] ?? '17:00:00');
+        $isOnDuty = isset($_POST['is_on_duty']) ? (int)$_POST['is_on_duty'] : 0;
+
+        // Save schedule WITHOUT using database (JSON file storage)
+        $savedToJson = false;
+        if (function_exists('saveStaffScheduleToJson') && $staffId > 0) {
+            $savedToJson = saveStaffScheduleToJson($staffId, [
+                'staff_id' => $staffId,
+                'work_days' => $workDays,
+                'shift_start' => $shiftStart,
+                'shift_end' => $shiftEnd,
+                'is_on_duty' => $isOnDuty
+            ]);
+        }
+
+        if ($staffId > 0 && !empty($pdo)) {
+            try {
+                try {
+                    $pdo->exec("ALTER TABLE staff ADD COLUMN work_days VARCHAR(100) DEFAULT 'Monday, Tuesday, Wednesday, Thursday, Friday'");
+                    $pdo->exec("ALTER TABLE staff ADD COLUMN shift_start TIME DEFAULT '08:00:00'");
+                    $pdo->exec("ALTER TABLE staff ADD COLUMN shift_end TIME DEFAULT '17:00:00'");
+                    $pdo->exec("ALTER TABLE staff ADD COLUMN is_on_duty TINYINT(1) DEFAULT 1");
+                } catch (Throwable $tC) {}
+
+                $upd = $pdo->prepare("UPDATE staff SET work_days = :wd, shift_start = :ss, shift_end = :se, is_on_duty = :duty WHERE id = :id");
+                $upd->execute([
+                    'wd' => $workDays,
+                    'ss' => $shiftStart,
+                    'se' => $shiftEnd,
+                    'duty' => $isOnDuty,
+                    'id' => $staffId
+                ]);
+            } catch (Throwable $tSched) {
+                error_log("DB Staff Schedule Update Warning: " . $tSched->getMessage());
+            }
+        }
+        
+        $_SESSION['rhu_flash'] = "Staff duty schedule updated successfully (Saved to file-based JSON schedule storage)!";
+        header('Location: ' . dashboardUrl('staff'));
+        exit;
+    }
+
+    // 12. SAVE RHU STAFF ACCOUNT (Adds to both `users` and `staff` tables with full schema)
+    if ($action === 'save_staff') {
+        $firstName = trim($_POST['first_name'] ?? '');
+        $lastName = trim($_POST['last_name'] ?? '');
+        $email = trim($_POST['email'] ?? '');
+        $phone = trim($_POST['phone_number'] ?? ($_POST['contact_no'] ?? ''));
+        $staffType = trim($_POST['staff_type'] ?? 'RHU Staff');
+        $specialization = trim($_POST['specialization'] ?? '');
+        $licenseNumber = trim($_POST['license_number'] ?? '');
+        $licenseExpiry = !empty($_POST['license_expiry']) ? trim($_POST['license_expiry']) : null;
+        $address = trim($_POST['address'] ?? 'Nasugbu, Batangas');
+        $dateHired = !empty($_POST['date_hired']) ? trim($_POST['date_hired']) : date('Y-m-d');
+        $rawPassword = $_POST['password'] ?? '';
+        $passwordToUse = $rawPassword !== '' ? $rawPassword : 'Staff@123456';
+
+        // Map staffType to user role
+        // Map staffType to role name and resolve role_id
+        $roleName = 'RHU_STAFF';
+        $lowerType = strtolower($staffType);
+        if (str_contains($lowerType, 'doctor') || str_contains($lowerType, 'physician') || str_contains($lowerType, 'officer')) {
+            $roleName = 'PHYSICIAN';
+        } elseif (str_contains($lowerType, 'nurse')) {
+            $roleName = 'NURSE';
+        } elseif (str_contains($lowerType, 'midwife')) {
+            $roleName = 'MIDWIFE';
+        } elseif (str_contains($lowerType, 'tech')) {
+            $roleName = 'MEDTECH';
+        } elseif (str_contains($lowerType, 'sanitary') || str_contains($lowerType, 'inspector')) {
+            $roleName = 'SANITARY_INSPECTOR';
+        }
+
+        $roleId = 2; // Default fallback ID for staff role
+        try {
+            $rStmt = $pdo->prepare("SELECT id FROM roles WHERE name = :r LIMIT 1");
+            $rStmt->execute(['r' => $roleName]);
+            $fetchedRoleId = $rStmt->fetchColumn();
+            if ($fetchedRoleId) {
+                $roleId = (int)$fetchedRoleId;
+            }
+        } catch (Throwable $tR) {}
+
+        if (empty($firstName) || empty($lastName) || empty($email) || empty($staffType)) {
+            $_SESSION['rhu_error'] = 'Please complete all required fields (First Name, Last Name, Email, Designation/Staff Type).';
+        } else {
+            if (!empty($pdo)) {
+                try {
+                    // Ensure columns exist on staff table
+                    try {
+                        $pdo->exec("ALTER TABLE staff ADD COLUMN specialization VARCHAR(100) NULL AFTER license_expiry");
+                        $pdo->exec("ALTER TABLE staff ADD COLUMN phone_number VARCHAR(30) NULL AFTER specialization");
+                        $pdo->exec("ALTER TABLE staff ADD COLUMN address TEXT NULL AFTER phone_number");
+                        $pdo->exec("ALTER TABLE staff ADD COLUMN date_hired DATE NULL AFTER address");
+                    } catch (Throwable $tStaffCols) {}
+
+                    // Check if email already exists in users table
+                    $checkUser = $pdo->prepare("SELECT id FROM users WHERE email = :email LIMIT 1");
+                    $checkUser->execute(['email' => $email]);
+                    if ($checkUser->fetchColumn()) {
+                        $_SESSION['rhu_error'] = "A user account with email {$email} already exists.";
+                    } else {
+                        $passHash = password_hash($passwordToUse, PASSWORD_DEFAULT);
+                        $username = strtok($email, '@');
+
+                        // 1. Insert into users table (matching exact schema: id, username, email, password_hash, first_name, last_name, role_id, is_active, created_at)
+                        $uStmt = $pdo->prepare("INSERT INTO users (username, email, password_hash, first_name, last_name, role_id, is_active, created_at) VALUES (:u, :email, :hash, :fn, :ln, :rid, 1, NOW())");
+                        $uStmt->execute([
+                            'u' => $username,
+                            'email' => $email,
+                            'hash' => $passHash,
+                            'fn' => $firstName,
+                            'ln' => $lastName,
+                            'rid' => $roleId
+                        ]);
+                        $userId = $pdo->lastInsertId();
+
+                        // 2. Insert into staff table
+                        $sStmt = $pdo->prepare("INSERT INTO staff (user_id, staff_type, license_number, license_expiry, specialization, phone_number, address, date_hired, is_active, created_at) VALUES (:uid, :stype, :lic, :expiry, :spec, :phone, :addr, :dhired, 1, NOW())");
+                        $sStmt->execute([
+                            'uid' => $userId,
+                            'stype' => $staffType,
+                            'lic' => $licenseNumber ?: null,
+                            'expiry' => $licenseExpiry,
+                            'spec' => $specialization ?: null,
+                            'phone' => $phone ?: null,
+                            'addr' => $address ?: null,
+                            'dhired' => $dateHired
+                        ]);
+
+                        // 3. Email staff credentials
+                        $emailSubject = "Welcome to ResiHUnity RHU Staff Portal - Account Created";
+                        $emailBody = "
+                        <div style='font-family: Arial, sans-serif; padding: 20px; color: #333; max-width: 600px; border: 1px solid #e2e8f0; border-radius: 12px;'>
+                            <h2 style='color: #0284c7; margin-top: 0;'>Welcome to RHU Staff Portal</h2>
+                            <p>Hello <strong>" . htmlspecialchars($firstName . ' ' . $lastName) . "</strong>,</p>
+                            <p>Your RHU Staff account has been successfully created with the position: <strong>" . htmlspecialchars($staffType) . "</strong>.</p>
+                            
+                            <div style='background-color: #f0f9ff; border: 1px solid #bae6fd; padding: 15px; border-radius: 8px; margin: 20px 0;'>
+                                <h3 style='margin-top: 0; color: #0369a1;'>🔑 Staff Portal Login Credentials</h3>
+                                <p style='margin: 5px 0;'><strong>Username / Email:</strong> " . htmlspecialchars($email) . "</p>
+                                <p style='margin: 5px 0;'><strong>Password:</strong> " . htmlspecialchars($passwordToUse) . "</p>
+                                <p style='margin: 5px 0;'><strong>Designation:</strong> " . htmlspecialchars($staffType) . "</p>
+                            </div>
+
+                            <p><a href='http://localhost/RHU/rhu_web/src/app/components/RHULogin.php' style='display: inline-block; background-color: #0284c7; color: #fff; padding: 10px 18px; border-radius: 6px; text-decoration: none; font-weight: bold;'>Go to RHU Staff Login</a></p>
+                        </div>";
+
+                        if (function_exists('sendRHUEmail')) {
+                            sendRHUEmail($email, $emailSubject, $emailBody);
+                        }
+
+                        $_SESSION['rhu_flash'] = "Staff account for {$firstName} {$lastName} successfully added to users and staff tables!";
+                    }
+                } catch (Exception $e) {
+                    $_SESSION['rhu_error'] = 'Database error creating staff account: ' . $e->getMessage();
+                }
+            } else {
+                $_SESSION['rhu_error'] = 'Database unavailable. Staff account creation failed.';
+            }
+        }
+        header('Location: ' . dashboardUrl('staff'));
         exit;
     }
 }
@@ -1394,8 +1696,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     </style>
-  <link rel="stylesheet" href="dashboard-enhancements.css">
-  <script defer src="dashboard-enhancements.js?v=20260726-controls3"></script>
+    <link rel="stylesheet" href="dashboard-enhancements.css">
+    <script defer src="dashboard-enhancements.js?v=20260726-controls3"></script>
 </head>
 
 <body class="bg-gray-50 text-slate-900">
@@ -1438,9 +1740,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <!-- PRIMARY TOP QUICK TABS & BURGER DRAWER BUTTON -->
                 <div class="mt-3 flex items-center justify-between gap-2 desktop-tabs">
                     <div class="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-hide">
-                        <?php 
+                        <?php
                         $quickTabs = ['overview', 'opd', 'immunization', 'medicine', 'analytics'];
-                        foreach ($quickTabs as $id): 
+                        foreach ($quickTabs as $id):
                             if (!isset($tabs[$id])) continue;
                             [$label, $icon] = $tabs[$id];
                         ?>
@@ -1453,7 +1755,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     <!-- BURGER MENU TRIGGER BUTTON -->
                     <button type="button" onclick="document.getElementById('navDrawer').classList.remove('hidden')" class="flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-amber-400 text-slate-900 hover:bg-amber-300 transition-all shadow-md flex-shrink-0 cursor-pointer">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 6h16M4 12h16M4 18h16"></path>
+                        </svg>
                         <span>All Services</span>
                         <span class="bg-amber-500 text-slate-900 text-[10px] px-1.5 py-0.5 rounded-full font-black"><?php echo count($tabs); ?></span>
                     </button>
@@ -1487,7 +1791,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 <span>🩺</span> Clinical & Patient Programs
                             </h4>
                             <div class="grid grid-cols-1 gap-1.5">
-                                <?php 
+                                <?php
                                 $cat1 = ['opd', 'referrals', 'immunization', 'maternal', 'fp', 'tb_dots', 'nutrition'];
                                 foreach ($cat1 as $id):
                                     if (!isset($tabs[$id])) continue;
@@ -1510,7 +1814,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 <span>🛡️</span> Public Health & Surveillance
                             </h4>
                             <div class="grid grid-cols-1 gap-1.5">
-                                <?php 
+                                <?php
                                 $cat2 = ['disease', 'sanitation', 'vital', 'certificates'];
                                 foreach ($cat2 as $id):
                                     if (!isset($tabs[$id])) continue;
@@ -1533,7 +1837,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 <span>⚙️</span> RHU Operations & Analytics
                             </h4>
                             <div class="grid grid-cols-1 gap-1.5">
-                                <?php 
+                                <?php
                                 $cat3 = ['medicine', 'bhw', 'staff', 'reports', 'analytics', 'audit'];
                                 foreach ($cat3 as $id):
                                     if (!isset($tabs[$id])) continue;
@@ -1571,7 +1875,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </a>
                 <?php endforeach; ?>
                 <button type="button" onclick="document.getElementById('navDrawer').classList.remove('hidden')" class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-amber-600 font-bold">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 6h16M4 12h16M4 18h16"></path>
+                    </svg>
                     <span class="text-[10px] leading-none mt-0.5">More</span>
                 </button>
             </div>
@@ -1652,25 +1958,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </div>
                     </div>
 
-                    <div class="grid md:grid-cols-3 gap-4">
-                        <?php $actions = [
-                            ['label' => 'New OPD Consultation', 'tab' => 'opd', 'color' => 'bg-blue-600'],
-                            ['label' => 'Record Immunization', 'tab' => 'immunization', 'color' => 'bg-indigo-600'],
-                            ['label' => 'Prenatal Check-up', 'tab' => 'maternal', 'color' => 'bg-pink-500'],
-                            ['label' => 'Issue Health Certificate', 'tab' => 'certificates', 'color' => 'bg-green-600'],
-                            ['label' => 'Create Referral', 'tab' => 'referrals', 'color' => 'bg-purple-600'],
-                            ['label' => 'PIDSR Report', 'tab' => 'disease', 'color' => 'bg-orange-600'],
-                            ['label' => 'Nutrition Assessment', 'tab' => 'nutrition', 'color' => 'bg-yellow-500'],
-                            ['label' => 'TB-DOTS Entry', 'tab' => 'tb_dots', 'color' => 'bg-red-600'],
-                        ];
-                        foreach ($actions as $actionItem): ?>
-                            <a href="<?php echo esc(dashboardUrl($actionItem['tab'])); ?>" class="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50 transition-colors text-left bg-white shadow-sm border border-gray-100">
-                                <span class="w-7 h-7 <?php echo esc($actionItem['color']); ?> rounded-lg flex items-center justify-center text-white">+</span>
-                                <span class="text-xs font-semibold text-gray-700"><?php echo esc($actionItem['label']); ?></span>
-                                <span class="ml-auto text-gray-400"><?php echo iconSvg('right', 'w-4 h-4'); ?></span>
-                            </a>
-                        <?php endforeach; ?>
-                    </div>
 
                     <div class="grid md:grid-cols-3 gap-4">
                         <div class="bg-white rounded-xl p-4 sm:p-5 shadow-sm border border-gray-100">
@@ -1730,9 +2017,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900">OPD / Consultation Log</h2>
-                        <div class="flex gap-2">
-                            <a href="<?php echo esc(dashboardUrl('opd', ['modal' => 'new_opd'])); ?>" class="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700"><?php echo iconSvg('plus', 'w-4 h-4'); ?> New Consultation</a>
-                        </div>
                     </div>
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <?php $stats = [
@@ -1749,20 +2033,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <?php endforeach; ?>
                     </div>
                     <div class="space-y-3">
-                        <?php foreach ($mockOPDConsultations as $c): ?>
-                            <div class="bg-white rounded-xl shadow-sm border border-gray-100">
-                                <div class="p-4">
+                        <?php if (empty($mockOPDConsultations)): ?>
+                            <div class="bg-white rounded-2xl p-8 border border-gray-200 text-center space-y-2">
+                                <div class="w-12 h-12 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center mx-auto text-xl font-bold">📅</div>
+                                <h3 class="font-extrabold text-gray-800 text-sm">No Resident Appointments Received Yet</h3>
+                                <p class="text-xs text-gray-500 max-w-md mx-auto">Only appointment requests where residents explicitly select your name or schedule during booking will appear in your queue.</p>
+                            </div>
+                        <?php else: ?>
+                            <?php foreach ($mockOPDConsultations as $c): ?>
+                                <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4 transition-all hover:border-sky-200">
                                     <div class="flex items-start justify-between gap-3">
-                                        <div>
-                                            <p class="font-bold text-gray-900"><?php echo esc($c['patientName']); ?> <span class="font-normal text-gray-500 text-sm"><?php echo esc($c['age']); ?>y / <?php echo esc($c['gender']); ?></span></p>
-                                            <p class="text-sm text-gray-700 mt-1"><?php echo esc($c['diagnosis']); ?></p>
-                                            <p class="text-xs text-gray-500 mt-1"><?php echo esc($c['barangay']); ?> • <?php echo esc($c['physician']); ?> • <?php echo esc($c['date']); ?></p>
+                                        <div class="space-y-1">
+                                            <div class="flex items-center gap-2">
+                                                <p class="font-extrabold text-gray-900 text-sm"><?php echo esc($c['patientName']); ?></p>
+                                                <span class="text-xs text-gray-500 font-medium"><?php echo esc($c['age']); ?>y / <?php echo esc($c['gender']); ?></span>
+                                                <span class="text-[10px] px-2 py-0.5 rounded-full font-bold bg-slate-100 text-slate-700"><?php echo esc($c['barangay']); ?></span>
+                                            </div>
+
+                                            <p class="text-xs font-bold text-sky-800 bg-sky-50 px-2.5 py-1 rounded-lg border border-sky-100 inline-block">
+                                                📋 Chief Complaint: <?php echo esc($c['chiefComplaint']); ?>
+                                            </p>
+
+                                            <div class="flex flex-wrap items-center gap-3 text-xs text-gray-600 pt-1">
+                                                <span class="inline-flex items-center gap-1 font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100">
+                                                    👨‍⚕️ Chosen Provider: <strong><?php echo esc($c['physician']); ?></strong>
+                                                </span>
+                                                <span class="font-medium text-gray-500">📅 Scheduled: <strong><?php echo esc($c['date']); ?></strong></span>
+                                            </div>
                                         </div>
-                                        <span class="text-xs px-2 py-0.5 rounded-full font-semibold <?php echo $c['disposition'] === 'referred' ? 'bg-purple-100 text-purple-700' : 'bg-green-100 text-green-700'; ?>"><?php echo esc($c['disposition']); ?></span>
+                                        <div class="text-right">
+                                            <span class="text-xs px-2.5 py-1 rounded-full font-bold uppercase tracking-wider <?php echo $c['disposition'] === 'referred' ? 'bg-purple-100 text-purple-700' : ($c['disposition'] === 'completed' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-800'); ?>">
+                                                <?php echo esc($c['disposition']); ?>
+                                            </span>
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                        <?php endforeach; ?>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
                     </div>
                 </div>
             <?php endif; ?>
@@ -1777,7 +2084,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900">Referral Management</h2>
-                        <a href="<?php echo esc(dashboardUrl('referrals', ['modal' => 'new_referral'])); ?>" class="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-semibold hover:bg-purple-700"><?php echo iconSvg('plus', 'w-4 h-4'); ?> New Referral</a>
                     </div>
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <?php $refStats = [
@@ -1839,7 +2145,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900">Immunization (EPI) Records</h2>
-                        <a href="<?php echo esc(dashboardUrl('immunization', ['modal' => 'new_immunization'])); ?>" class="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700"><?php echo iconSvg('plus', 'w-4 h-4'); ?> Record Immunization</a>
                     </div>
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <?php $immStats = [
@@ -1891,13 +2196,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900">Maternal Health</h2>
-                        <a href="<?php echo esc(dashboardUrl('maternal', ['modal' => 'new_maternal'])); ?>" class="inline-flex items-center gap-2 px-4 py-2 bg-pink-600 text-white rounded-lg text-sm font-semibold hover:bg-pink-700"><?php echo iconSvg('plus', 'w-4 h-4'); ?> New Case</a>
                     </div>
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <?php $matStats = [
                             ['label' => 'Active Cases', 'value' => count($mockMaternalCases), 'color' => 'pink'],
                             ['label' => 'High Risk', 'value' => $highRiskMom, 'color' => 'red'],
-                            ['label' => 'Next Visits', 'value' => count(array_filter($mockMaternalCases, static fn($m) => strtotime($m['nextVisit']) <= strtotime('+30 days'))), 'color' => 'orange'],
+                            ['label' => 'Next Visits', 'value' => count(array_filter($mockMaternalCases, static fn($m) => !empty($m['nextVisit']) && strtotime($m['nextVisit']) <= strtotime('+30 days'))), 'color' => 'orange'],
                             ['label' => 'Enrolled', 'value' => count(array_filter($mockMaternalCases, static fn($m) => $m['philhealthStatus'] === 'enrolled')), 'color' => 'green'],
                         ];
                         foreach ($matStats as $s): ?>
@@ -1927,13 +2231,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900">Family Planning</h2>
-                        <a href="<?php echo esc(dashboardUrl('fp', ['modal' => 'new_fp'])); ?>" class="inline-flex items-center gap-2 px-4 py-2 bg-rose-600 text-white rounded-lg text-sm font-semibold hover:bg-rose-700"><?php echo iconSvg('plus', 'w-4 h-4'); ?> New Client</a>
                     </div>
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <?php $fpStats = [
                             ['label' => 'Total FP Clients', 'value' => count($mockFPClients), 'color' => 'rose'],
                             ['label' => 'Active', 'value' => count(array_filter($mockFPClients, static fn($fp) => $fp['status'] === 'active')), 'color' => 'green'],
-                            ['label' => 'Next Supply', 'value' => count(array_filter($mockFPClients, static fn($fp) => strtotime($fp['nextVisit']) <= strtotime('+30 days'))), 'color' => 'blue'],
+                            ['label' => 'Next Supply', 'value' => count(array_filter($mockFPClients, static fn($fp) => !empty($fp['nextVisit']) && strtotime($fp['nextVisit']) <= strtotime('+30 days'))), 'color' => 'blue'],
                             ['label' => 'New Acceptors', 'value' => count(array_filter($mockFPClients, static fn($fp) => $fp['acceptorType'] === 'new')), 'color' => 'purple'],
                         ];
                         foreach ($fpStats as $s): ?>
@@ -1971,7 +2274,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900">TB-DOTS Cases</h2>
-                        <a href="<?php echo esc(dashboardUrl('tb_dots', ['modal' => 'new_tb'])); ?>" class="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-semibold hover:bg-red-700"><?php echo iconSvg('plus', 'w-4 h-4'); ?> New Case</a>
                     </div>
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <?php $tbStats = [
@@ -2007,7 +2309,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900">Nutrition Cases</h2>
-                        <a href="<?php echo esc(dashboardUrl('nutrition', ['modal' => 'new_nutrition'])); ?>" class="inline-flex items-center gap-2 px-4 py-2 bg-yellow-600 text-white rounded-lg text-sm font-semibold hover:bg-yellow-700"><?php echo iconSvg('plus', 'w-4 h-4'); ?> Add Case</a>
                     </div>
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <?php $nutriStats = [
@@ -2051,7 +2352,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900">Disease Surveillance</h2>
-                        <a href="<?php echo esc(dashboardUrl('disease', ['modal' => 'new_report'])); ?>" class="inline-flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg text-sm font-semibold hover:bg-orange-700"><?php echo iconSvg('plus', 'w-4 h-4'); ?> New Report</a>
                     </div>
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <?php $diseaseStats = [
@@ -2092,7 +2392,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900">Vital Statistics</h2>
-                        <a href="<?php echo esc(dashboardUrl('vital', ['modal' => 'new_vital'])); ?>" class="inline-flex items-center gap-2 px-4 py-2 bg-slate-600 text-white rounded-lg text-sm font-semibold hover:bg-slate-700"><?php echo iconSvg('plus', 'w-4 h-4'); ?> Add Record</a>
                     </div>
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <?php $vitalStats = [
@@ -2182,7 +2481,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="space-y-4 sm:space-y-5">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-base sm:text-xl font-bold text-gray-900">Sanitation Inspections</h2>
-                        <a href="<?php echo esc(dashboardUrl('sanitation', ['modal' => 'new_inspection'])); ?>" class="inline-flex items-center gap-2 px-4 py-2 bg-lime-600 text-white rounded-lg text-sm font-semibold hover:bg-lime-700"><?php echo iconSvg('plus', 'w-4 h-4'); ?> Add Inspection</a>
                     </div>
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <?php $sanStats = [
@@ -2278,7 +2576,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             ['label' => 'Total BHWs', 'value' => count($mockBHWs), 'color' => 'teal'],
                             ['label' => 'Active', 'value' => $activeBHW, 'color' => 'green'],
                             ['label' => 'Households', 'value' => array_sum(array_map(static fn($b) => $b['householdsAssigned'], $mockBHWs)), 'color' => 'blue'],
-                            ['label' => 'Training Level', 'value' => count(array_filter($mockBHWs, static fn($b) => $b['trainingLevel'] === 'Senior BHW')), 'color' => 'purple'],
+                            ['label' => 'Coverage Areas', 'value' => count(array_unique(array_column($mockBHWs, 'barangay'))), 'color' => 'purple'],
                         ];
                         foreach ($bhwStats as $s): ?>
                             <div class="bg-white rounded-xl p-4 shadow-sm border border-gray-100 text-center">
@@ -2291,18 +2589,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <div class="overflow-x-auto">
                             <table class="w-full text-sm min-w-[700px]">
                                 <thead class="bg-gray-50">
-                                    <tr><?php foreach (['ID', 'Name', 'Barangay', 'Contact', 'Status', 'Donors Referred', 'Households'] as $h): ?><th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide"><?php echo esc($h); ?></th><?php endforeach; ?></tr>
+                                    <tr><?php foreach (['ID', 'Name', 'Email / Contact', 'Barangay', 'Cert Number', 'Status', 'Households', 'Actions'] as $h): ?><th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide"><?php echo esc($h); ?></th><?php endforeach; ?></tr>
                                 </thead>
                                 <tbody class="divide-y divide-gray-100">
                                     <?php foreach ($mockBHWs as $bhw): ?>
                                         <tr class="hover:bg-gray-50">
                                             <td class="px-4 py-3 font-mono text-xs text-gray-500"><?php echo esc($bhw['id']); ?></td>
-                                            <td class="px-3 py-2.5 text-gray-900"><?php echo esc($bhw['name']); ?></td>
-                                            <td class="px-4 py-3 text-gray-600"><?php echo esc($bhw['barangay']); ?></td>
-                                            <td class="px-4 py-3 text-gray-600"><?php echo esc($bhw['contactNo']); ?></td>
+                                            <td class="px-3 py-2.5 text-gray-900 font-bold"><?php echo esc($bhw['name']); ?></td>
+                                            <td class="px-4 py-3 text-gray-600 text-xs">
+                                                <div><?php echo esc($bhw['email'] ?? ''); ?></div>
+                                                <div class="text-gray-400"><?php echo esc($bhw['contactNo']); ?></div>
+                                            </td>
+                                            <td class="px-4 py-3 text-gray-600 font-medium"><?php echo esc($bhw['barangay']); ?></td>
+                                            <td class="px-3 py-2.5 font-mono text-xs text-teal-700 font-bold"><?php echo esc($bhw['certNumber']); ?></td>
                                             <td class="px-3 py-2.5"><span class="text-xs px-2 py-0.5 rounded-full font-semibold <?php echo $bhw['activeStatus'] ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'; ?>"><?php echo $bhw['activeStatus'] ? 'Active' : 'Inactive'; ?></span></td>
-                                            <td class="px-3 py-2.5 text-gray-600"><?php echo esc($bhw['donorsReferred']); ?></td>
                                             <td class="px-3 py-2.5 text-gray-600"><?php echo esc($bhw['householdsAssigned']); ?></td>
+                                            <td class="px-3 py-2.5">
+                                                <a href="<?php echo esc(dashboardUrl('bhw', ['modal' => 'edit_bhw', 'bhw_id' => $bhw['bhw_id'] ?? 0])); ?>" class="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1">
+                                                    <?php echo iconSvg('edit', 'w-3 h-3'); ?> Edit
+                                                </a>
+                                            </td>
                                         </tr>
                                     <?php endforeach; ?>
                                 </tbody>
@@ -2334,20 +2640,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </div>
                     <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
                         <div class="overflow-x-auto">
-                            <table class="w-full text-sm min-w-[700px]">
+                            <table class="w-full text-sm min-w-[850px]">
                                 <thead class="bg-gray-50">
-                                    <tr><?php foreach (['ID', 'Name', 'Position', 'Email', 'License', 'Status', 'PRC Expiry'] as $h): ?><th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide"><?php echo esc($h); ?></th><?php endforeach; ?></tr>
+                                    <tr><?php foreach (['ID', 'Name', 'Position', 'Duty Schedule', 'Shift Hours', 'Duty Status', 'Action'] as $h): ?><th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide"><?php echo esc($h); ?></th><?php endforeach; ?></tr>
                                 </thead>
                                 <tbody class="divide-y divide-gray-100">
                                     <?php foreach ($mockRHUStaff as $staff): ?>
                                         <tr class="hover:bg-gray-50">
                                             <td class="px-4 py-3 font-mono text-xs text-gray-500"><?php echo esc($staff['id']); ?></td>
-                                            <td class="px-3 py-2.5 text-gray-900"><?php echo esc($staff['name']); ?></td>
-                                            <td class="px-4 py-3 text-gray-600"><?php echo esc($staff['position']); ?></td>
-                                            <td class="px-4 py-3 text-gray-600"><?php echo esc($staff['email']); ?></td>
-                                            <td class="px-3 py-2.5 text-gray-600"><?php echo esc($staff['licenseNo']); ?></td>
-                                            <td class="px-4 py-3"><span class="text-xs px-2 py-0.5 rounded-full font-semibold <?php echo $staff['status'] === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'; ?>"><?php echo esc(ucfirst($staff['status'])); ?></span></td>
-                                            <td class="px-3 py-2.5 text-gray-600"><?php echo esc($staff['prcExpiry']); ?></td>
+                                            <td class="px-3 py-2.5 font-bold text-gray-900"><?php echo esc($staff['name']); ?></td>
+                                            <td class="px-4 py-3 text-gray-600 font-medium"><?php echo esc($staff['position']); ?></td>
+                                            <td class="px-3 py-2.5 text-xs font-semibold text-sky-800 bg-sky-50/50 rounded-lg"><?php echo esc($staff['workDays'] ?? 'Mon-Fri'); ?></td>
+                                            <td class="px-3 py-2.5 text-xs text-gray-600 font-mono"><?php echo esc($staff['shiftHours'] ?? '8:00 AM - 5:00 PM'); ?></td>
+                                            <td class="px-4 py-3">
+                                                <span class="text-xs px-2.5 py-1 rounded-full font-bold <?php echo !empty($staff['isOnDuty']) ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'; ?>">
+                                                    <?php echo !empty($staff['isOnDuty']) ? '🟢 On Duty' : '🔴 Off Duty'; ?>
+                                                </span>
+                                            </td>
+                                            <td class="px-3 py-2.5">
+                                                <a href="<?php echo esc(dashboardUrl('staff', ['modal' => 'edit_schedule', 'staff_id' => $staff['staff_id'] ?? 0])); ?>" class="inline-flex items-center gap-1 text-xs font-bold text-sky-700 bg-sky-50 px-2.5 py-1.5 rounded-lg border border-sky-200 hover:bg-sky-100 transition-all">
+                                                    📅 Edit Schedule
+                                                </a>
+                                            </td>
                                         </tr>
                                     <?php endforeach; ?>
                                 </tbody>
@@ -2366,17 +2680,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
                         <div class="overflow-x-auto">
                             <table class="w-full min-w-[850px] text-sm">
-                                <thead class="bg-gray-50"><tr><?php foreach (['Date & Time','Actor','Action','Module','Record','IP Address'] as $heading): ?><th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-gray-500"><?php echo esc($heading); ?></th><?php endforeach; ?></tr></thead>
+                                <thead class="bg-gray-50">
+                                    <tr><?php foreach (['Date & Time', 'Actor', 'Action', 'Module', 'Record', 'IP Address'] as $heading): ?><th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-gray-500"><?php echo esc($heading); ?></th><?php endforeach; ?></tr>
+                                </thead>
                                 <tbody class="divide-y divide-gray-100">
-                                    <?php if (!$staffAuditLogs): ?><tr><td colspan="6" class="px-4 py-8 text-center text-gray-500">No audit records are available.</td></tr><?php endif; ?>
+                                    <?php if (!$staffAuditLogs): ?><tr>
+                                            <td colspan="6" class="px-4 py-8 text-center text-gray-500">No audit records are available.</td>
+                                        </tr><?php endif; ?>
                                     <?php foreach ($staffAuditLogs as $log): ?><tr class="hover:bg-gray-50">
-                                        <td class="px-4 py-3 text-gray-600"><?php echo esc($log['created_at']); ?></td>
-                                        <td class="px-4 py-3 font-semibold text-gray-900"><?php echo esc($log['actor']); ?></td>
-                                        <td class="px-4 py-3 text-gray-700"><?php echo esc($log['action']); ?></td>
-                                        <td class="px-4 py-3 text-gray-600"><?php echo esc($log['entity_type'] ?: 'System'); ?></td>
-                                        <td class="px-4 py-3 font-mono text-xs text-gray-500"><?php echo esc($log['entity_id'] ?? '—'); ?></td>
-                                        <td class="px-4 py-3 font-mono text-xs text-gray-500"><?php echo esc($log['ip_address'] ?: 'Not recorded'); ?></td>
-                                    </tr><?php endforeach; ?>
+                                            <td class="px-4 py-3 text-gray-600"><?php echo esc($log['created_at']); ?></td>
+                                            <td class="px-4 py-3 font-semibold text-gray-900"><?php echo esc($log['actor']); ?></td>
+                                            <td class="px-4 py-3 text-gray-700"><?php echo esc($log['action']); ?></td>
+                                            <td class="px-4 py-3 text-gray-600"><?php echo esc($log['entity_type'] ?: 'System'); ?></td>
+                                            <td class="px-4 py-3 font-mono text-xs text-gray-500"><?php echo esc($log['entity_id'] ?? '—'); ?></td>
+                                            <td class="px-4 py-3 font-mono text-xs text-gray-500"><?php echo esc($log['ip_address'] ?: 'Not recorded'); ?></td>
+                                        </tr><?php endforeach; ?>
                                 </tbody>
                             </table>
                         </div>
@@ -2439,16 +2757,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <p class="mt-1 text-xs text-gray-500">Calculated only from consultations, diagnoses, referrals, disease cases, and medicine transactions stored in MySQL.</p>
                     </div>
                     <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                        <div class="rounded-xl border border-blue-100 bg-white p-4"><p class="text-xs font-semibold text-gray-500">Recorded consultations</p><p class="mt-1 text-2xl font-black text-blue-700"><?php echo count($mockOPDConsultations); ?></p></div>
-                        <div class="rounded-xl border border-indigo-100 bg-white p-4"><p class="text-xs font-semibold text-gray-500">Latest OPD trend</p><p class="mt-1 text-2xl font-black text-indigo-700"><?php echo ($opdTrendPercent > 0 ? '+' : '') . $opdTrendPercent; ?>%</p></div>
-                        <div class="rounded-xl border border-red-100 bg-white p-4"><p class="text-xs font-semibold text-gray-500">Recorded disease cases</p><p class="mt-1 text-2xl font-black text-red-700"><?php echo array_sum(array_column($mockDiseaseReports, 'cases')); ?></p></div>
-                        <div class="rounded-xl border border-emerald-100 bg-white p-4"><p class="text-xs font-semibold text-gray-500">Medicine items tracked</p><p class="mt-1 text-2xl font-black text-emerald-700"><?php echo count($mockMedicineInventory); ?></p></div>
+                        <div class="rounded-xl border border-blue-100 bg-white p-4">
+                            <p class="text-xs font-semibold text-gray-500">Recorded consultations</p>
+                            <p class="mt-1 text-2xl font-black text-blue-700"><?php echo count($mockOPDConsultations); ?></p>
+                        </div>
+                        <div class="rounded-xl border border-indigo-100 bg-white p-4">
+                            <p class="text-xs font-semibold text-gray-500">Latest OPD trend</p>
+                            <p class="mt-1 text-2xl font-black text-indigo-700"><?php echo ($opdTrendPercent > 0 ? '+' : '') . $opdTrendPercent; ?>%</p>
+                        </div>
+                        <div class="rounded-xl border border-red-100 bg-white p-4">
+                            <p class="text-xs font-semibold text-gray-500">Recorded disease cases</p>
+                            <p class="mt-1 text-2xl font-black text-red-700"><?php echo array_sum(array_column($mockDiseaseReports, 'cases')); ?></p>
+                        </div>
+                        <div class="rounded-xl border border-emerald-100 bg-white p-4">
+                            <p class="text-xs font-semibold text-gray-500">Medicine items tracked</p>
+                            <p class="mt-1 text-2xl font-black text-emerald-700"><?php echo count($mockMedicineInventory); ?></p>
+                        </div>
                     </div>
                     <div class="grid gap-5 lg:grid-cols-2">
                         <section class="rounded-2xl border border-gray-200 bg-white p-5">
                             <h3 class="font-bold text-gray-900">OPD activity — last 7 recorded days</h3>
                             <?php if (!$weeklyOPDData): ?><p class="mt-4 text-sm text-gray-500">No consultation activity is available for the last seven days.</p><?php else: ?>
-                                <div class="mt-4 space-y-3"><?php $weeklyMax = max(array_column($weeklyOPDData, 'consultations')) ?: 1; foreach ($weeklyOPDData as $row): ?><div><div class="mb-1 flex justify-between text-xs"><span class="font-semibold text-gray-600"><?php echo esc($row['day']); ?></span><span><?php echo (int)$row['consultations']; ?> consultation(s), <?php echo (int)$row['referred']; ?> referred</span></div><div class="h-2 rounded-full bg-gray-100"><div class="h-2 rounded-full bg-gradient-to-r from-blue-500 to-teal-500" style="width: <?php echo round(((int)$row['consultations'] / $weeklyMax) * 100); ?>%"></div></div></div><?php endforeach; ?></div>
+                                <div class="mt-4 space-y-3"><?php $weeklyMax = max(array_column($weeklyOPDData, 'consultations')) ?: 1;
+                                                                                                                                                                    foreach ($weeklyOPDData as $row): ?><div>
+                                            <div class="mb-1 flex justify-between text-xs"><span class="font-semibold text-gray-600"><?php echo esc($row['day']); ?></span><span><?php echo (int)$row['consultations']; ?> consultation(s), <?php echo (int)$row['referred']; ?> referred</span></div>
+                                            <div class="h-2 rounded-full bg-gray-100">
+                                                <div class="h-2 rounded-full bg-gradient-to-r from-blue-500 to-teal-500" style="width: <?php echo round(((int)$row['consultations'] / $weeklyMax) * 100); ?>%"></div>
+                                            </div>
+                                        </div><?php endforeach; ?></div>
                             <?php endif; ?>
                         </section>
                         <section class="rounded-2xl border border-gray-200 bg-white p-5">
@@ -2458,197 +2794,205 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </div>
                     <section class="rounded-2xl border border-gray-200 bg-white p-5">
                         <h3 class="font-bold text-gray-900">Medicine stock status from recorded inventory and transactions</h3>
-                        <?php if (!$mockMedicineInventory): ?><p class="mt-4 text-sm text-gray-500">No medicine inventory records are available.</p><?php else: ?><div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3"><?php foreach ($mockMedicineInventory as $medicine): ?><div class="rounded-xl border border-gray-100 bg-gray-50 p-4"><div class="flex justify-between gap-3"><div><p class="font-bold text-gray-900"><?php echo esc($medicine['genericName']); ?></p><p class="text-xs text-gray-500"><?php echo esc($medicine['form']); ?></p></div><span class="h-fit rounded-full px-2 py-1 text-[10px] font-bold <?php echo $medicine['status'] === 'critical' ? 'bg-red-100 text-red-700' : ($medicine['status'] === 'low' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'); ?>"><?php echo esc(ucfirst($medicine['status'])); ?></span></div><div class="mt-3 flex justify-between text-xs text-gray-600"><span>Stock: <?php echo (int)$medicine['stock']; ?></span><span>30-day issues: <?php echo (int)$medicine['usage30days']; ?></span></div></div><?php endforeach; ?></div><?php endif; ?>
+                        <?php if (!$mockMedicineInventory): ?><p class="mt-4 text-sm text-gray-500">No medicine inventory records are available.</p><?php else: ?><div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3"><?php foreach ($mockMedicineInventory as $medicine): ?><div class="rounded-xl border border-gray-100 bg-gray-50 p-4">
+                                        <div class="flex justify-between gap-3">
+                                            <div>
+                                                <p class="font-bold text-gray-900"><?php echo esc($medicine['genericName']); ?></p>
+                                                <p class="text-xs text-gray-500"><?php echo esc($medicine['form']); ?></p>
+                                            </div><span class="h-fit rounded-full px-2 py-1 text-[10px] font-bold <?php echo $medicine['status'] === 'critical' ? 'bg-red-100 text-red-700' : ($medicine['status'] === 'low' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'); ?>"><?php echo esc(ucfirst($medicine['status'])); ?></span>
+                                        </div>
+                                        <div class="mt-3 flex justify-between text-xs text-gray-600"><span>Stock: <?php echo (int)$medicine['stock']; ?></span><span>30-day issues: <?php echo (int)$medicine['usage30days']; ?></span></div>
+                                    </div><?php endforeach; ?></div><?php endif; ?>
                     </section>
                 </div>
                 <?php if (false): ?>
-                <div class="space-y-6">
-                    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-4">
-                        <div>
-                            <h2 class="text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('trend', 'w-6 h-6 text-purple-700'); ?> RHU Health Predictive Analytics & Seasonal Forecasting</h2>
-                            <p class="text-xs text-gray-500 mt-1">Predictive machine learning models based on historical consultations, climate seasons, and epidemiological trends in Nasugbu</p>
+                    <div class="space-y-6">
+                        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-4">
+                            <div>
+                                <h2 class="text-xl font-bold text-gray-900 flex items-center gap-2"><?php echo iconSvg('trend', 'w-6 h-6 text-purple-700'); ?> RHU Health Predictive Analytics & Seasonal Forecasting</h2>
+                                <p class="text-xs text-gray-500 mt-1">Predictive machine learning models based on historical consultations, climate seasons, and epidemiological trends in Nasugbu</p>
+                            </div>
+                            <span class="text-xs font-bold bg-purple-100 text-purple-800 px-3 py-1 rounded-full">DOH Predictive Engine Active</span>
                         </div>
-                        <span class="text-xs font-bold bg-purple-100 text-purple-800 px-3 py-1 rounded-full">DOH Predictive Engine Active</span>
-                    </div>
 
-                    <!-- 1. SEASONAL CHECKUP SURGE FORECAST -->
-                    <div class="grid md:grid-cols-3 gap-4">
-                        <div class="bg-white rounded-2xl p-5 shadow-sm border border-gray-200 space-y-2 border-l-4 border-l-blue-600">
-                            <div class="flex justify-between items-start">
-                                <div>
-                                    <span class="text-[10px] font-bold uppercase tracking-wider text-blue-600">Monsoon / Rainy Season</span>
-                                    <h3 class="font-bold text-gray-900 text-sm mt-0.5">July – October Peak</h3>
+                        <!-- 1. SEASONAL CHECKUP SURGE FORECAST -->
+                        <div class="grid md:grid-cols-3 gap-4">
+                            <div class="bg-white rounded-2xl p-5 shadow-sm border border-gray-200 space-y-2 border-l-4 border-l-blue-600">
+                                <div class="flex justify-between items-start">
+                                    <div>
+                                        <span class="text-[10px] font-bold uppercase tracking-wider text-blue-600">Monsoon / Rainy Season</span>
+                                        <h3 class="font-bold text-gray-900 text-sm mt-0.5">July – October Peak</h3>
+                                    </div>
+                                    <span class="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-bold text-[11px]">+45% Checkups</span>
                                 </div>
-                                <span class="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-bold text-[11px]">+45% Checkups</span>
-                            </div>
-                            <p class="text-xs text-gray-600">Surge in Influenza-like Illness, Acute Respiratory Infections & Dengue. Ensure staff allocation in Triage.</p>
-                            <div class="pt-2 text-[11px] font-mono text-blue-900 font-semibold bg-blue-50 p-2 rounded">
-                                Predicted Monthly Consults: <strong>380 – 450 cases/mo</strong>
-                            </div>
-                        </div>
-
-                        <div class="bg-white rounded-2xl p-5 shadow-sm border border-gray-200 space-y-2 border-l-4 border-l-amber-500">
-                            <div class="flex justify-between items-start">
-                                <div>
-                                    <span class="text-[10px] font-bold uppercase tracking-wider text-amber-600">Dry / Summer Season</span>
-                                    <h3 class="font-bold text-gray-900 text-sm mt-0.5">March – May Peak</h3>
+                                <p class="text-xs text-gray-600">Surge in Influenza-like Illness, Acute Respiratory Infections & Dengue. Ensure staff allocation in Triage.</p>
+                                <div class="pt-2 text-[11px] font-mono text-blue-900 font-semibold bg-blue-50 p-2 rounded">
+                                    Predicted Monthly Consults: <strong>380 – 450 cases/mo</strong>
                                 </div>
-                                <span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold text-[11px]">+30% Checkups</span>
                             </div>
-                            <p class="text-xs text-gray-600">Spike in Essential Hypertension, Dehydration, Heat Exhaustion & Skin Conditions due to high temperatures.</p>
-                            <div class="pt-2 text-[11px] font-mono text-amber-900 font-semibold bg-amber-50 p-2 rounded">
-                                Predicted Monthly Consults: <strong>310 – 360 cases/mo</strong>
-                            </div>
-                        </div>
 
-                        <div class="bg-white rounded-2xl p-5 shadow-sm border border-gray-200 space-y-2 border-l-4 border-l-purple-600">
-                            <div class="flex justify-between items-start">
-                                <div>
-                                    <span class="text-[10px] font-bold uppercase tracking-wider text-purple-600">Post-Holiday Season</span>
-                                    <h3 class="font-bold text-gray-900 text-sm mt-0.5">January – February Peak</h3>
+                            <div class="bg-white rounded-2xl p-5 shadow-sm border border-gray-200 space-y-2 border-l-4 border-l-amber-500">
+                                <div class="flex justify-between items-start">
+                                    <div>
+                                        <span class="text-[10px] font-bold uppercase tracking-wider text-amber-600">Dry / Summer Season</span>
+                                        <h3 class="font-bold text-gray-900 text-sm mt-0.5">March – May Peak</h3>
+                                    </div>
+                                    <span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold text-[11px]">+30% Checkups</span>
                                 </div>
-                                <span class="px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 font-bold text-[11px]">+35% Checkups</span>
+                                <p class="text-xs text-gray-600">Spike in Essential Hypertension, Dehydration, Heat Exhaustion & Skin Conditions due to high temperatures.</p>
+                                <div class="pt-2 text-[11px] font-mono text-amber-900 font-semibold bg-amber-50 p-2 rounded">
+                                    Predicted Monthly Consults: <strong>310 – 360 cases/mo</strong>
+                                </div>
                             </div>
-                            <p class="text-xs text-gray-600">Surge in Diabetes, Cardiovascular follow-ups, and Lifestyle Disease checkups after holiday celebrations.</p>
-                            <div class="pt-2 text-[11px] font-mono text-purple-900 font-semibold bg-purple-50 p-2 rounded">
-                                Predicted Monthly Consults: <strong>330 – 380 cases/mo</strong>
+
+                            <div class="bg-white rounded-2xl p-5 shadow-sm border border-gray-200 space-y-2 border-l-4 border-l-purple-600">
+                                <div class="flex justify-between items-start">
+                                    <div>
+                                        <span class="text-[10px] font-bold uppercase tracking-wider text-purple-600">Post-Holiday Season</span>
+                                        <h3 class="font-bold text-gray-900 text-sm mt-0.5">January – February Peak</h3>
+                                    </div>
+                                    <span class="px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 font-bold text-[11px]">+35% Checkups</span>
+                                </div>
+                                <p class="text-xs text-gray-600">Surge in Diabetes, Cardiovascular follow-ups, and Lifestyle Disease checkups after holiday celebrations.</p>
+                                <div class="pt-2 text-[11px] font-mono text-purple-900 font-semibold bg-purple-50 p-2 rounded">
+                                    Predicted Monthly Consults: <strong>330 – 380 cases/mo</strong>
+                                </div>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- 2. EPIDEMIC RISK & MEDICINE STOCKOUT PREDICTIONS -->
-                    <div class="grid md:grid-cols-2 gap-6">
-                        <!-- EPIDEMIC OUTBREAK PREDICTOR -->
+                        <!-- 2. EPIDEMIC RISK & MEDICINE STOCKOUT PREDICTIONS -->
+                        <div class="grid md:grid-cols-2 gap-6">
+                            <!-- EPIDEMIC OUTBREAK PREDICTOR -->
+                            <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-200 space-y-4">
+                                <div class="flex items-center justify-between border-b border-gray-100 pb-3">
+                                    <h3 class="font-bold text-gray-900 text-base flex items-center gap-2">
+                                        <?php echo iconSvg('shield', 'w-5 h-5 text-red-600'); ?>
+                                        Disease Outbreak Risk Forecast (Q3 2026)
+                                    </h3>
+                                    <span class="text-xs font-bold bg-red-100 text-red-800 px-2.5 py-0.5 rounded-full">High Alert</span>
+                                </div>
+                                <div class="space-y-3 text-xs">
+                                    <div class="p-3.5 bg-red-50 rounded-xl border border-red-200 space-y-1">
+                                        <div class="flex justify-between font-bold text-red-900">
+                                            <span>Dengue Outbreak Risk</span>
+                                            <span>78% Outbreak Probability</span>
+                                        </div>
+                                        <p class="text-red-700">Predicted peak in August – September across Barangays Halang, Mabini, and Balibago due to standing water.</p>
+                                        <div class="w-full bg-red-200 h-2 rounded-full mt-2">
+                                            <div class="bg-red-600 h-2 rounded-full" style="width: 78%"></div>
+                                        </div>
+                                    </div>
+
+                                    <div class="p-3.5 bg-amber-50 rounded-xl border border-amber-200 space-y-1">
+                                        <div class="flex justify-between font-bold text-amber-900">
+                                            <span>Acute Diarrhea / AGE Risk</span>
+                                            <span>54% Moderate Risk</span>
+                                        </div>
+                                        <p class="text-amber-700">Predicted increase in pediatric diarrhea during heavy monsoon rains. Stock ORS and zinc supplements.</p>
+                                        <div class="w-full bg-amber-200 h-2 rounded-full mt-2">
+                                            <div class="bg-amber-500 h-2 rounded-full" style="width: 54%"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- MEDICINE STOCKOUT & REORDER PREDICTOR -->
+                            <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-200 space-y-4">
+                                <div class="flex items-center justify-between border-b border-gray-100 pb-3">
+                                    <h3 class="font-bold text-gray-900 text-base flex items-center gap-2">
+                                        <?php echo iconSvg('pill', 'w-5 h-5 text-emerald-600'); ?>
+                                        Medicine Stockout Date Predictions
+                                    </h3>
+                                    <span class="text-xs font-bold bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full">Demand Velocity</span>
+                                </div>
+                                <div class="space-y-3 text-xs">
+                                    <div class="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
+                                        <div>
+                                            <p class="font-bold text-gray-900">Amoxicillin 500mg</p>
+                                            <p class="text-gray-500">Avg. 15 caps / day</p>
+                                        </div>
+                                        <div class="text-right">
+                                            <span class="px-2 py-0.5 bg-red-100 text-red-800 font-bold rounded">Stockout in 18 Days</span>
+                                            <p class="text-[10px] text-gray-400 mt-0.5">Reorder 300 caps immediately</p>
+                                        </div>
+                                    </div>
+
+                                    <div class="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
+                                        <div>
+                                            <p class="font-bold text-gray-900">ORS (Oral Rehydration Salt)</p>
+                                            <p class="text-gray-500">Avg. 12 sachet / day</p>
+                                        </div>
+                                        <div class="text-right">
+                                            <span class="px-2 py-0.5 bg-red-100 text-red-800 font-bold rounded">Stockout in 9 Days</span>
+                                            <p class="text-[10px] text-gray-400 mt-0.5">Critical Reorder Needed</p>
+                                        </div>
+                                    </div>
+
+                                    <div class="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
+                                        <div>
+                                            <p class="font-bold text-gray-900">Amlodipine 5mg</p>
+                                            <p class="text-gray-500">Avg. 8 tabs / day</p>
+                                        </div>
+                                        <div class="text-right">
+                                            <span class="px-2 py-0.5 bg-amber-100 text-amber-800 font-bold rounded">Stockout in 24 Days</span>
+                                            <p class="text-[10px] text-gray-400 mt-0.5">Sufficient for 3 weeks</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 3. MONTHLY CHECKUP VOLUME PREDICTION TABLE -->
                         <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-200 space-y-4">
                             <div class="flex items-center justify-between border-b border-gray-100 pb-3">
-                                <h3 class="font-bold text-gray-900 text-base flex items-center gap-2">
-                                    <?php echo iconSvg('shield', 'w-5 h-5 text-red-600'); ?>
-                                    Disease Outbreak Risk Forecast (Q3 2026)
-                                </h3>
-                                <span class="text-xs font-bold bg-red-100 text-red-800 px-2.5 py-0.5 rounded-full">High Alert</span>
+                                <h3 class="font-bold text-gray-900 text-base">Monthly Checkup Volume: Historical vs. Predicted (2026)</h3>
+                                <span class="text-xs bg-purple-100 text-purple-800 px-3 py-1 rounded-full font-bold">12-Month Predictive Curve</span>
                             </div>
-                            <div class="space-y-3 text-xs">
-                                <div class="p-3.5 bg-red-50 rounded-xl border border-red-200 space-y-1">
-                                    <div class="flex justify-between font-bold text-red-900">
-                                        <span>Dengue Outbreak Risk</span>
-                                        <span>78% Outbreak Probability</span>
-                                    </div>
-                                    <p class="text-red-700">Predicted peak in August – September across Barangays Halang, Mabini, and Balibago due to standing water.</p>
-                                    <div class="w-full bg-red-200 h-2 rounded-full mt-2">
-                                        <div class="bg-red-600 h-2 rounded-full" style="width: 78%"></div>
-                                    </div>
-                                </div>
-
-                                <div class="p-3.5 bg-amber-50 rounded-xl border border-amber-200 space-y-1">
-                                    <div class="flex justify-between font-bold text-amber-900">
-                                        <span>Acute Diarrhea / AGE Risk</span>
-                                        <span>54% Moderate Risk</span>
-                                    </div>
-                                    <p class="text-amber-700">Predicted increase in pediatric diarrhea during heavy monsoon rains. Stock ORS and zinc supplements.</p>
-                                    <div class="w-full bg-amber-200 h-2 rounded-full mt-2">
-                                        <div class="bg-amber-500 h-2 rounded-full" style="width: 54%"></div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- MEDICINE STOCKOUT & REORDER PREDICTOR -->
-                        <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-200 space-y-4">
-                            <div class="flex items-center justify-between border-b border-gray-100 pb-3">
-                                <h3 class="font-bold text-gray-900 text-base flex items-center gap-2">
-                                    <?php echo iconSvg('pill', 'w-5 h-5 text-emerald-600'); ?>
-                                    Medicine Stockout Date Predictions
-                                </h3>
-                                <span class="text-xs font-bold bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full">Demand Velocity</span>
-                            </div>
-                            <div class="space-y-3 text-xs">
-                                <div class="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
-                                    <div>
-                                        <p class="font-bold text-gray-900">Amoxicillin 500mg</p>
-                                        <p class="text-gray-500">Avg. 15 caps / day</p>
-                                    </div>
-                                    <div class="text-right">
-                                        <span class="px-2 py-0.5 bg-red-100 text-red-800 font-bold rounded">Stockout in 18 Days</span>
-                                        <p class="text-[10px] text-gray-400 mt-0.5">Reorder 300 caps immediately</p>
-                                    </div>
-                                </div>
-
-                                <div class="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
-                                    <div>
-                                        <p class="font-bold text-gray-900">ORS (Oral Rehydration Salt)</p>
-                                        <p class="text-gray-500">Avg. 12 sachet / day</p>
-                                    </div>
-                                    <div class="text-right">
-                                        <span class="px-2 py-0.5 bg-red-100 text-red-800 font-bold rounded">Stockout in 9 Days</span>
-                                        <p class="text-[10px] text-gray-400 mt-0.5">Critical Reorder Needed</p>
-                                    </div>
-                                </div>
-
-                                <div class="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
-                                    <div>
-                                        <p class="font-bold text-gray-900">Amlodipine 5mg</p>
-                                        <p class="text-gray-500">Avg. 8 tabs / day</p>
-                                    </div>
-                                    <div class="text-right">
-                                        <span class="px-2 py-0.5 bg-amber-100 text-amber-800 font-bold rounded">Stockout in 24 Days</span>
-                                        <p class="text-[10px] text-gray-400 mt-0.5">Sufficient for 3 weeks</p>
-                                    </div>
-                                </div>
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-xs">
+                                    <thead class="bg-gray-50 text-gray-500 uppercase">
+                                        <tr>
+                                            <th class="px-3 py-2 text-left">Month</th>
+                                            <th class="px-3 py-2 text-left">Season Type</th>
+                                            <th class="px-3 py-2 text-left">Historical Checkups</th>
+                                            <th class="px-3 py-2 text-left">Predicted Checkups</th>
+                                            <th class="px-3 py-2 text-left">Dominant Predicted Condition</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-gray-100">
+                                        <tr class="hover:bg-gray-50">
+                                            <td class="px-3 py-2.5 font-bold text-gray-900">January 2026</td>
+                                            <td class="px-3 py-2.5 text-purple-700 font-semibold">Post-Holiday Peak</td>
+                                            <td class="px-3 py-2.5 font-mono text-gray-600">312 consults</td>
+                                            <td class="px-3 py-2.5 font-mono font-bold text-purple-900">340 consults</td>
+                                            <td class="px-3 py-2.5 text-gray-700">Diabetes & Hypertension Checkups</td>
+                                        </tr>
+                                        <tr class="hover:bg-gray-50">
+                                            <td class="px-3 py-2.5 font-bold text-gray-900">April 2026</td>
+                                            <td class="px-3 py-2.5 text-amber-700 font-semibold">Summer Heat Peak</td>
+                                            <td class="px-3 py-2.5 font-mono text-gray-600">290 consults</td>
+                                            <td class="px-3 py-2.5 font-mono font-bold text-amber-900">325 consults</td>
+                                            <td class="px-3 py-2.5 text-gray-700">Dehydration, Heat Exhaustion & Hypertension</td>
+                                        </tr>
+                                        <tr class="hover:bg-gray-50 bg-blue-50/50">
+                                            <td class="px-3 py-2.5 font-bold text-gray-900">August 2026 (Upcoming)</td>
+                                            <td class="px-3 py-2.5 text-blue-700 font-semibold">Monsoon Rainy Peak</td>
+                                            <td class="px-3 py-2.5 font-mono text-gray-400">N/A (Future)</td>
+                                            <td class="px-3 py-2.5 font-mono font-bold text-blue-900">420 consults (+45%)</td>
+                                            <td class="px-3 py-2.5 font-bold text-red-600">Dengue Fever & Acute Bronchitis</td>
+                                        </tr>
+                                        <tr class="hover:bg-gray-50 bg-blue-50/50">
+                                            <td class="px-3 py-2.5 font-bold text-gray-900">September 2026 (Upcoming)</td>
+                                            <td class="px-3 py-2.5 text-blue-700 font-semibold">Monsoon Rainy Peak</td>
+                                            <td class="px-3 py-2.5 font-mono text-gray-400">N/A (Future)</td>
+                                            <td class="px-3 py-2.5 font-mono font-bold text-blue-900">395 consults (+35%)</td>
+                                            <td class="px-3 py-2.5 font-bold text-amber-600">Influenza-like Illness & AGE / Diarrhea</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     </div>
-
-                    <!-- 3. MONTHLY CHECKUP VOLUME PREDICTION TABLE -->
-                    <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-200 space-y-4">
-                        <div class="flex items-center justify-between border-b border-gray-100 pb-3">
-                            <h3 class="font-bold text-gray-900 text-base">Monthly Checkup Volume: Historical vs. Predicted (2026)</h3>
-                            <span class="text-xs bg-purple-100 text-purple-800 px-3 py-1 rounded-full font-bold">12-Month Predictive Curve</span>
-                        </div>
-                        <div class="overflow-x-auto">
-                            <table class="w-full text-xs">
-                                <thead class="bg-gray-50 text-gray-500 uppercase">
-                                    <tr>
-                                        <th class="px-3 py-2 text-left">Month</th>
-                                        <th class="px-3 py-2 text-left">Season Type</th>
-                                        <th class="px-3 py-2 text-left">Historical Checkups</th>
-                                        <th class="px-3 py-2 text-left">Predicted Checkups</th>
-                                        <th class="px-3 py-2 text-left">Dominant Predicted Condition</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-gray-100">
-                                    <tr class="hover:bg-gray-50">
-                                        <td class="px-3 py-2.5 font-bold text-gray-900">January 2026</td>
-                                        <td class="px-3 py-2.5 text-purple-700 font-semibold">Post-Holiday Peak</td>
-                                        <td class="px-3 py-2.5 font-mono text-gray-600">312 consults</td>
-                                        <td class="px-3 py-2.5 font-mono font-bold text-purple-900">340 consults</td>
-                                        <td class="px-3 py-2.5 text-gray-700">Diabetes & Hypertension Checkups</td>
-                                    </tr>
-                                    <tr class="hover:bg-gray-50">
-                                        <td class="px-3 py-2.5 font-bold text-gray-900">April 2026</td>
-                                        <td class="px-3 py-2.5 text-amber-700 font-semibold">Summer Heat Peak</td>
-                                        <td class="px-3 py-2.5 font-mono text-gray-600">290 consults</td>
-                                        <td class="px-3 py-2.5 font-mono font-bold text-amber-900">325 consults</td>
-                                        <td class="px-3 py-2.5 text-gray-700">Dehydration, Heat Exhaustion & Hypertension</td>
-                                    </tr>
-                                    <tr class="hover:bg-gray-50 bg-blue-50/50">
-                                        <td class="px-3 py-2.5 font-bold text-gray-900">August 2026 (Upcoming)</td>
-                                        <td class="px-3 py-2.5 text-blue-700 font-semibold">Monsoon Rainy Peak</td>
-                                        <td class="px-3 py-2.5 font-mono text-gray-400">N/A (Future)</td>
-                                        <td class="px-3 py-2.5 font-mono font-bold text-blue-900">420 consults (+45%)</td>
-                                        <td class="px-3 py-2.5 font-bold text-red-600">Dengue Fever & Acute Bronchitis</td>
-                                    </tr>
-                                    <tr class="hover:bg-gray-50 bg-blue-50/50">
-                                        <td class="px-3 py-2.5 font-bold text-gray-900">September 2026 (Upcoming)</td>
-                                        <td class="px-3 py-2.5 text-blue-700 font-semibold">Monsoon Rainy Peak</td>
-                                        <td class="px-3 py-2.5 font-mono text-gray-400">N/A (Future)</td>
-                                        <td class="px-3 py-2.5 font-mono font-bold text-blue-900">395 consults (+35%)</td>
-                                        <td class="px-3 py-2.5 font-bold text-amber-600">Influenza-like Illness & AGE / Diarrhea</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
                 <?php endif; ?>
             <?php endif; ?>
         </main>
@@ -3032,15 +3376,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <?php if ($modal === 'new_fp'): ?>
         <div class="fixed inset-0 z-[70] flex items-center justify-center bg-gray-900/50 p-4">
             <div class="w-full max-w-2xl rounded-2xl bg-white shadow-2xl max-h-[92vh] overflow-y-auto">
-                <div class="flex items-center justify-between border-b border-gray-100 p-5"><div><h3 class="font-bold text-gray-900">New Family Planning Client</h3><p class="text-xs text-gray-500">This record will be stored in the RHU database.</p></div><a href="<?php echo esc(dashboardUrl('fp')); ?>" class="rounded-lg p-2 hover:bg-gray-100"><?php echo iconSvg('x', 'w-5 h-5'); ?></a></div>
+                <div class="flex items-center justify-between border-b border-gray-100 p-5">
+                    <div>
+                        <h3 class="font-bold text-gray-900">New Family Planning Client</h3>
+                        <p class="text-xs text-gray-500">This record will be stored in the RHU database.</p>
+                    </div><a href="<?php echo esc(dashboardUrl('fp')); ?>" class="rounded-lg p-2 hover:bg-gray-100"><?php echo iconSvg('x', 'w-5 h-5'); ?></a>
+                </div>
                 <form method="post" class="grid gap-4 p-5 sm:grid-cols-2">
                     <input type="hidden" name="action" value="save_fp">
-                    <label class="sm:col-span-2 text-xs font-semibold text-gray-700">Resident<select required name="resident_id" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"><option value="">Select resident</option><?php foreach ($allResidents as $residentOption): ?><option value="<?php echo (int)$residentOption['id']; ?>"><?php echo esc($residentOption['name'] . ' — ' . $residentOption['barangay']); ?></option><?php endforeach; ?></select></label>
+                    <label class="sm:col-span-2 text-xs font-semibold text-gray-700">Resident<select required name="resident_id" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5">
+                            <option value="">Select resident</option><?php foreach ($allResidents as $residentOption): ?><option value="<?php echo (int)$residentOption['id']; ?>"><?php echo esc($residentOption['name'] . ' — ' . $residentOption['barangay']); ?></option><?php endforeach; ?>
+                        </select></label>
                     <label class="text-xs font-semibold text-gray-700">Method<input required name="method" placeholder="e.g. Pills, DMPA, Implant" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
-                    <label class="text-xs font-semibold text-gray-700">Acceptor type<select required name="acceptor_type" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"><option value="">Select type</option><option>New</option><option>Continuing</option><option>Changing Method</option><option>Restarting</option></select></label>
+                    <label class="text-xs font-semibold text-gray-700">Acceptor type<select required name="acceptor_type" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5">
+                            <option value="">Select type</option>
+                            <option>New</option>
+                            <option>Continuing</option>
+                            <option>Changing Method</option>
+                            <option>Restarting</option>
+                        </select></label>
                     <label class="text-xs font-semibold text-gray-700">Last supply date<input type="date" name="last_supply_date" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
                     <label class="text-xs font-semibold text-gray-700">Next visit<input type="date" name="next_visit_date" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
-                    <label class="text-xs font-semibold text-gray-700">Status<select name="status" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"><option>Active</option><option>Inactive</option><option>Completed</option></select></label>
+                    <label class="text-xs font-semibold text-gray-700">Status<select name="status" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5">
+                            <option>Active</option>
+                            <option>Inactive</option>
+                            <option>Completed</option>
+                        </select></label>
                     <label class="sm:col-span-2 text-xs font-semibold text-gray-700">Notes<textarea name="notes" rows="3" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></textarea></label>
                     <div class="sm:col-span-2 flex justify-end gap-2"><a href="<?php echo esc(dashboardUrl('fp')); ?>" class="rounded-xl border border-gray-300 px-4 py-2.5 text-sm font-semibold">Cancel</a><button class="rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700">Save Client</button></div>
                 </form>
@@ -3051,13 +3412,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <?php if ($modal === 'new_inspection'): ?>
         <div class="fixed inset-0 z-[70] flex items-center justify-center bg-gray-900/50 p-4">
             <div class="w-full max-w-2xl rounded-2xl bg-white shadow-2xl max-h-[92vh] overflow-y-auto">
-                <div class="flex items-center justify-between border-b border-gray-100 p-5"><div><h3 class="font-bold text-gray-900">Add Sanitation Inspection</h3><p class="text-xs text-gray-500">Inspection details will be stored in the RHU database.</p></div><a href="<?php echo esc(dashboardUrl('sanitation')); ?>" class="rounded-lg p-2 hover:bg-gray-100"><?php echo iconSvg('x', 'w-5 h-5'); ?></a></div>
+                <div class="flex items-center justify-between border-b border-gray-100 p-5">
+                    <div>
+                        <h3 class="font-bold text-gray-900">Add Sanitation Inspection</h3>
+                        <p class="text-xs text-gray-500">Inspection details will be stored in the RHU database.</p>
+                    </div><a href="<?php echo esc(dashboardUrl('sanitation')); ?>" class="rounded-lg p-2 hover:bg-gray-100"><?php echo iconSvg('x', 'w-5 h-5'); ?></a>
+                </div>
                 <form method="post" class="grid gap-4 p-5 sm:grid-cols-2">
                     <input type="hidden" name="action" value="save_inspection">
                     <label class="text-xs font-semibold text-gray-700">Establishment<input required name="establishment" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
                     <label class="text-xs font-semibold text-gray-700">Barangay<input required name="barangay" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
-                    <label class="text-xs font-semibold text-gray-700">Inspector<select name="inspector_staff_id" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"><option value="">Not assigned</option><?php foreach ($allStaff as $staffOption): ?><option value="<?php echo (int)$staffOption['id']; ?>"><?php echo esc($staffOption['name'] . ' — ' . $staffOption['staff_type']); ?></option><?php endforeach; ?></select></label>
-                    <label class="text-xs font-semibold text-gray-700">Status<select name="status" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"><option>Compliant</option><option>Conditional</option><option>Non-compliant</option><option>For Follow-up</option></select></label>
+                    <label class="text-xs font-semibold text-gray-700">Inspector<select name="inspector_staff_id" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5">
+                            <option value="">Not assigned</option><?php foreach ($allStaff as $staffOption): ?><option value="<?php echo (int)$staffOption['id']; ?>"><?php echo esc($staffOption['name'] . ' — ' . $staffOption['staff_type']); ?></option><?php endforeach; ?>
+                        </select></label>
+                    <label class="text-xs font-semibold text-gray-700">Status<select name="status" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5">
+                            <option>Compliant</option>
+                            <option>Conditional</option>
+                            <option>Non-compliant</option>
+                            <option>For Follow-up</option>
+                        </select></label>
                     <label class="text-xs font-semibold text-gray-700">Inspection date<input required type="date" name="inspection_date" value="<?php echo date('Y-m-d'); ?>" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
                     <label class="text-xs font-semibold text-gray-700">Next inspection<input type="date" name="next_inspection_date" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
                     <label class="text-xs font-semibold text-gray-700">Compliance rate (%)<input type="number" min="0" max="100" step="0.01" name="compliance_rate" value="0" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
@@ -3073,7 +3446,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div class="fixed inset-0 z-[70] flex items-center justify-center bg-gray-900/50 p-4">
             <div class="w-full max-w-lg rounded-2xl bg-white shadow-2xl">
                 <div class="flex items-center justify-between border-b border-gray-100 p-5">
-                    <div><h3 class="font-bold text-gray-900">Generate FHSIS Report</h3><p class="text-xs text-gray-500">Counts will be calculated directly from stored RHU records.</p></div>
+                    <div>
+                        <h3 class="font-bold text-gray-900">Generate FHSIS Report</h3>
+                        <p class="text-xs text-gray-500">Counts will be calculated directly from stored RHU records.</p>
+                    </div>
                     <a href="<?php echo esc(dashboardUrl('reports')); ?>" class="rounded-lg p-2 hover:bg-gray-100"><?php echo iconSvg('x', 'w-5 h-5'); ?></a>
                 </div>
                 <form method="post" class="grid gap-4 p-5 sm:grid-cols-2">
@@ -3086,9 +3462,174 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </select>
                     </label>
                     <label class="text-xs font-semibold text-gray-700">Year<input required type="number" min="2000" max="2100" name="report_year" value="<?php echo date('Y'); ?>" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></label>
-                    <label class="text-xs font-semibold text-gray-700">Status<select name="status" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"><option>Draft</option><option>Submitted</option></select></label>
+                    <label class="text-xs font-semibold text-gray-700">Status<select name="status" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5">
+                            <option>Draft</option>
+                            <option>Submitted</option>
+                        </select></label>
                     <label class="sm:col-span-2 text-xs font-semibold text-gray-700">Notes<textarea name="notes" rows="3" class="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2.5"></textarea></label>
                     <div class="sm:col-span-2 flex justify-end gap-2"><a href="<?php echo esc(dashboardUrl('reports')); ?>" class="rounded-xl border border-gray-300 px-4 py-2.5 text-sm font-semibold">Cancel</a><button class="rounded-xl bg-slate-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-900">Generate from Database</button></div>
+                </form>
+            </div>
+        </div>
+    <?php endif; ?>
+
+    <!-- 8. ADD STAFF ACCOUNT MODAL -->
+    <?php if ($modal === 'new_staff'): ?>
+        <div class="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
+            <div class="bg-white rounded-2xl shadow-2xl w-full sm:max-w-lg max-h-[90vh] overflow-y-auto">
+                <div class="p-5 border-b flex items-center justify-between bg-sky-700 text-white rounded-t-2xl">
+                    <h2 class="text-base font-bold flex items-center gap-2">👨‍⚕️ Add New RHU Staff Member</h2>
+                    <a href="<?php echo esc(dashboardUrl('staff')); ?>" class="text-sky-100 hover:text-white"><?php echo iconSvg('x', 'w-5 h-5'); ?></a>
+                </div>
+                <form class="p-5 space-y-4" method="post">
+                    <input type="hidden" name="action" value="save_staff">
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">First Name *</label>
+                            <input name="first_name" required placeholder="e.g. Juan" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">Last Name *</label>
+                            <input name="last_name" required placeholder="e.g. Dela Cruz" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">Email Address (Login Username) *</label>
+                            <input type="email" name="email" required placeholder="e.g. dr.delacruz@nasugbu.gov.ph" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">Contact Phone Number</label>
+                            <input name="phone_number" placeholder="e.g. 0917 123 4567" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">Designation / Staff Type *</label>
+                            <select name="staff_type" required class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm font-semibold">
+                                <option value="Public Health Nurse" selected>Public Health Nurse</option>
+                                <option value="Rural Health Midwife">Rural Health Midwife</option>
+                                <option value="Medical Technologist">Medical Technologist</option>
+                                <option value="Sanitary Inspector">Sanitary Inspector</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">Specialization / Medical Field</label>
+                            <input name="specialization" placeholder="e.g. Pediatrics, General Medicine" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">PRC License Number</label>
+                            <input name="license_number" placeholder="e.g. PRC-0123456" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm font-mono">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">License Expiry Date</label>
+                            <input type="date" name="license_expiry" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">Residential / Station Address</label>
+                            <input name="address" value="Nasugbu, Batangas" placeholder="e.g. Poblacion, Nasugbu" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-700 mb-1">Date Hired</label>
+                            <input type="date" name="date_hired" value="<?php echo date('Y-m-d'); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-gray-700 mb-1">Account Password</label>
+                        <input type="password" name="password" placeholder="Default: Staff@123456" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                    </div>
+
+                    <div class="p-3 bg-sky-50 rounded-xl border border-sky-200 text-xs text-sky-800 space-y-1">
+                        <p class="font-bold flex items-center gap-1">ℹ️ Database Sync Info</p>
+                        <p class="text-sky-700">Submitting this form automatically populates all 12 columns in the <strong>staff</strong> database table and creates login credentials in <strong>users</strong>.</p>
+                    </div>
+
+                    <div class="flex gap-3 pt-2">
+                        <a href="<?php echo esc(dashboardUrl('staff')); ?>" class="flex-1 py-2.5 border border-gray-300 rounded-xl text-xs font-bold text-gray-700 hover:bg-gray-50 text-center">Cancel</a>
+                        <button type="submit" class="flex-1 py-2.5 bg-sky-600 text-white rounded-xl text-xs font-bold hover:bg-sky-700 shadow-md">Save Staff Member</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    <?php endif; ?>
+
+    <!-- 8B. EDIT STAFF DUTY SCHEDULE MODAL -->
+    <?php if ($modal === 'edit_schedule'):
+        $targetStaffId = (int)($_GET['staff_id'] ?? 0);
+        $targetStaff = null;
+        foreach ($mockRHUStaff as $st) {
+            if (($st['staff_id'] ?? 0) === $targetStaffId) {
+                $targetStaff = $st;
+                break;
+            }
+        }
+        if (!$targetStaff && !empty($mockRHUStaff[0])) $targetStaff = $mockRHUStaff[0];
+    ?>
+        <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+                <div class="p-4 border-b flex items-center justify-between bg-sky-700 text-white">
+                    <h2 class="text-sm font-bold flex items-center gap-2">📅 Manage Staff Duty Schedule</h2>
+                    <a href="<?php echo esc(dashboardUrl('staff')); ?>" class="text-sky-100 hover:text-white"><?php echo iconSvg('x', 'w-5 h-5'); ?></a>
+                </div>
+                <form class="p-5 space-y-4 text-xs" method="post">
+                    <input type="hidden" name="action" value="update_staff_schedule">
+                    <input type="hidden" name="staff_id" value="<?php echo (int)($targetStaff['staff_id'] ?? 0); ?>">
+
+                    <div class="p-3 bg-sky-50 rounded-xl border border-sky-200">
+                        <p class="font-bold text-sky-900 text-sm"><?php echo esc($targetStaff['name'] ?? 'Staff Member'); ?></p>
+                        <p class="text-sky-700 font-medium"><?php echo esc($targetStaff['position'] ?? 'RHU Staff'); ?></p>
+                    </div>
+
+                    <div>
+                        <label class="block font-bold text-gray-700 mb-1.5">Scheduled Work Days *</label>
+                        <div class="grid grid-cols-2 gap-2 p-2.5 border border-gray-200 rounded-xl bg-gray-50">
+                            <?php 
+                            $currDays = array_map('trim', explode(',', (string)($targetStaff['workDays'] ?? 'Monday, Tuesday, Wednesday, Thursday, Friday')));
+                            $allDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+                            foreach ($allDays as $day):
+                                $isChk = in_array($day, $currDays, true);
+                            ?>
+                                <label class="flex items-center gap-2 cursor-pointer font-medium text-gray-800">
+                                    <input type="checkbox" name="work_days[]" value="<?php echo $day; ?>" <?php echo $isChk ? 'checked' : ''; ?> class="rounded text-sky-600 focus:ring-sky-500">
+                                    <?php echo $day; ?>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block font-bold text-gray-700 mb-1">Shift Start Time *</label>
+                            <input type="time" name="shift_start" required value="<?php echo esc($targetStaff['rawShiftStart'] ?? '08:00'); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-xl font-semibold">
+                        </div>
+                        <div>
+                            <label class="block font-bold text-gray-700 mb-1">Shift End Time *</label>
+                            <input type="time" name="shift_end" required value="<?php echo esc($targetStaff['rawShiftEnd'] ?? '17:00'); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-xl font-semibold">
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block font-bold text-gray-700 mb-1">Duty Availability Status *</label>
+                        <select name="is_on_duty" class="w-full px-3 py-2 border border-gray-300 rounded-xl font-bold">
+                            <option value="1" <?php echo !empty($targetStaff['isOnDuty']) ? 'selected' : ''; ?>>🟢 On Duty (Available for Resident Booking)</option>
+                            <option value="0" <?php echo empty($targetStaff['isOnDuty']) ? 'selected' : ''; ?>>🔴 Off Duty / On Leave (Temporarily Unavailable)</option>
+                        </select>
+                    </div>
+
+                    <div class="flex gap-2 pt-2">
+                        <a href="<?php echo esc(dashboardUrl('staff')); ?>" class="flex-1 py-2.5 border border-gray-300 rounded-xl font-bold text-gray-700 hover:bg-gray-50 text-center">Cancel</a>
+                        <button type="submit" class="flex-1 py-2.5 bg-sky-600 text-white rounded-xl font-bold hover:bg-sky-700 shadow-md">Save Schedule</button>
+                    </div>
                 </form>
             </div>
         </div>
@@ -3103,7 +3644,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
                 <form class="p-5 space-y-4" method="post">
                     <input type="hidden" name="action" value="save_bhw">
-                    
+
                     <div class="grid grid-cols-2 gap-3">
                         <div>
                             <label class="block text-xs font-bold text-gray-700 mb-1">First Name *</label>
@@ -3131,19 +3672,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <label class="block text-xs font-bold text-gray-700 mb-1">Assigned Barangay *</label>
                             <select name="barangay" required class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm font-semibold">
                                 <option value="">-- Choose Barangay --</option>
-                                <?php foreach ($RHU_INFO['catchmentBarangays'] as $brgy): ?>
+                                <?php foreach ($dbBarangays as $brgy): ?>
                                     <option value="<?php echo esc($brgy); ?>"><?php echo esc($brgy); ?></option>
                                 <?php endforeach; ?>
-                                <option value="Anilao">Anilao</option>
-                                <option value="Balibago">Balibago</option>
-                                <option value="Bucana">Bucana</option>
-                                <option value="Cogunan">Cogunan</option>
-                                <option value="Dayap">Dayap</option>
-                                <option value="Halang">Halang</option>
-                                <option value="Mabini">Mabini</option>
-                                <option value="Nagsabaran">Nagsabaran</option>
-                                <option value="Poblacion">Poblacion</option>
-                                <option value="Wawa">Wawa</option>
                             </select>
                         </div>
                         <div>
@@ -3180,6 +3711,93 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
         </div>
     <?php endif; ?>
+
+    <?php
+    if ($modal === 'edit_bhw') {
+        $editBhwId = (int)($_GET['bhw_id'] ?? 0);
+        $editTarget = null;
+        foreach ($mockBHWs as $bItem) {
+            if ((int)($bItem['bhw_id'] ?? 0) === $editBhwId) {
+                $editTarget = $bItem;
+                break;
+            }
+        }
+        if ($editTarget) {
+    ?>
+            <div class="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
+                <div class="bg-white rounded-2xl shadow-2xl w-full sm:max-w-lg max-h-[90vh] overflow-y-auto">
+                    <div class="p-5 border-b flex items-center justify-between bg-amber-600 text-white rounded-t-2xl">
+                        <h2 class="text-base font-bold flex items-center gap-2">✏️ Edit Barangay Health Worker (BHW)</h2>
+                        <a href="<?php echo esc(dashboardUrl('bhw')); ?>" class="text-amber-100 hover:text-white"><?php echo iconSvg('x', 'w-5 h-5'); ?></a>
+                    </div>
+                    <form class="p-5 space-y-4" method="post">
+                        <input type="hidden" name="action" value="update_bhw">
+                        <input type="hidden" name="bhw_id" value="<?php echo (int)$editTarget['bhw_id']; ?>">
+                        <input type="hidden" name="staff_id" value="<?php echo (int)($editTarget['staff_id'] ?? 0); ?>">
+                        <input type="hidden" name="user_id" value="<?php echo (int)($editTarget['user_id'] ?? 0); ?>">
+
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-bold text-gray-700 mb-1">First Name *</label>
+                                <input name="first_name" required value="<?php echo esc($editTarget['first_name'] ?? ''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-gray-700 mb-1">Last Name *</label>
+                                <input name="last_name" required value="<?php echo esc($editTarget['last_name'] ?? ''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-bold text-gray-700 mb-1">Email Address *</label>
+                                <input type="email" name="email" required value="<?php echo esc($editTarget['email'] ?? ''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-gray-700 mb-1">Contact Phone Number</label>
+                                <input name="contact_no" value="<?php echo esc($editTarget['contactNo'] ?? ''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-bold text-gray-700 mb-1">Assigned Barangay *</label>
+                                <select name="barangay" required class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm font-semibold">
+                                    <?php foreach ($dbBarangays as $brgy): ?>
+                                        <option value="<?php echo esc($brgy); ?>" <?php echo ($editTarget['barangay'] ?? '') === $brgy ? 'selected' : ''; ?>><?php echo esc($brgy); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-gray-700 mb-1">Assigned Households</label>
+                                <input type="number" name="households" value="<?php echo (int)($editTarget['householdsAssigned'] ?? 50); ?>" min="1" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm font-bold">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-bold text-gray-700 mb-1">BHW Certification Number</label>
+                                <input name="cert_number" value="<?php echo esc($editTarget['certNumber'] ?? ''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm font-mono font-bold text-teal-700">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-gray-700 mb-1">Account Status</label>
+                                <select name="is_active" class="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm font-semibold">
+                                    <option value="1" <?php echo !empty($editTarget['activeStatus']) ? 'selected' : ''; ?>>Active</option>
+                                    <option value="0" <?php echo empty($editTarget['activeStatus']) ? 'selected' : ''; ?>>Inactive</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="flex gap-3 pt-2">
+                            <a href="<?php echo esc(dashboardUrl('bhw')); ?>" class="flex-1 py-2.5 border border-gray-300 rounded-xl text-xs font-bold text-gray-700 hover:bg-gray-50 text-center">Cancel</a>
+                            <button type="submit" class="flex-1 py-2.5 bg-amber-600 text-white rounded-xl text-xs font-bold hover:bg-amber-700 shadow-md">Update BHW Record</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+    <?php
+        }
+    }
+    ?>
 </body>
 
 </html>

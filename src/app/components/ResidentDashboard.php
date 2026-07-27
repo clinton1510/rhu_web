@@ -199,10 +199,33 @@ if (!empty($pdo)) {
                     }
                 } elseif ($formType === 'appointment_request') {
                     $chiefComplaint = trim($_POST['chief_complaint'] ?? 'Primary Health Checkup');
+                    $appointmentType = trim($_POST['appointment_type'] ?? 'General Medical Consultation');
                     $preferredDate = trim($_POST['preferred_date'] ?? date('Y-m-d'));
-                    $ins = $pdo->prepare("INSERT INTO consultations (resident_id, physician_id, consultation_date, consultation_time, chief_complaint, diagnosis, consultation_notes, created_at) VALUES (:res, 1, :cdate, CURTIME(), :chief, 'Pending OPD Triage', 'Online Appointment Request from Resident Portal', NOW())");
-                    $ins->execute(['res' => $residentId, 'cdate' => $preferredDate, 'chief' => $chiefComplaint]);
-                    $_SESSION['resident_dashboard_message_flash'] = 'OPD Consultation Appointment request submitted to RHU Staff & Attending Physician.';
+                    $physicianId = !empty($_POST['physician_id']) ? (int)$_POST['physician_id'] : 1;
+
+                    $notes = "Appointment Category: {$appointmentType} | Booking Date: {$preferredDate} | Requested via Resident Portal";
+
+                    $ins = $pdo->prepare("INSERT INTO consultations (resident_id, physician_id, consultation_date, consultation_time, chief_complaint, diagnosis, consultation_notes, created_at) VALUES (:res, :pid, :cdate, CURTIME(), :chief, 'Pending OPD Triage', :notes, NOW())");
+                    $ins->execute([
+                        'res' => $residentId,
+                        'pid' => $physicianId,
+                        'cdate' => $preferredDate,
+                        'chief' => "[{$appointmentType}] {$chiefComplaint}",
+                        'notes' => $notes
+                    ]);
+
+                    if (function_exists('portalNotify')) {
+                        try {
+                            $uStmt = $pdo->prepare("SELECT user_id FROM staff WHERE id = :sid LIMIT 1");
+                            $uStmt->execute(['sid' => $physicianId]);
+                            if ($uUid = $uStmt->fetchColumn()) {
+                                $resName = trim(($resident['first_name'] ?? 'Resident') . ' ' . ($resident['last_name'] ?? ''));
+                                portalNotify($pdo, "New consultation appointment booked by {$resName} for {$preferredDate}.", (int)$uUid, null, 'RHUDashboard.php');
+                            }
+                        } catch (Throwable $tNotif) {}
+                    }
+
+                    $_SESSION['resident_dashboard_message_flash'] = "Appointment request for {$appointmentType} on {$preferredDate} submitted successfully to attending healthcare provider!";
                     header('Location: ResidentDashboard.php?tab=records');
                     exit;
                 }
@@ -219,6 +242,95 @@ if (!empty($pdo)) {
 
                     $_SESSION['resident_dashboard_message_flash'] = 'EMERGENCY REQUEST SENT! The RHU Disaster & Response Unit has been alerted.';
                     header('Location: ResidentDashboard.php?tab=emergency');
+                    exit;
+                }
+                // Handling Update Health Profile
+                elseif ($formType === 'update_health_profile') {
+                    $height = !empty($_POST['height']) ? (float)$_POST['height'] : null;
+                    $weight = !empty($_POST['weight']) ? (float)$_POST['weight'] : null;
+                    $bloodPressure = trim($_POST['blood_pressure'] ?? '');
+                    $heartRate = !empty($_POST['heart_rate']) ? (int)$_POST['heart_rate'] : null;
+                    $temperature = !empty($_POST['temperature']) ? (float)$_POST['temperature'] : null;
+                    $lastCheckupDate = !empty($_POST['last_checkup_date']) ? trim($_POST['last_checkup_date']) : date('Y-m-d');
+                    $smokingStatus = trim($_POST['smoking_status'] ?? 'Non-Smoker');
+                    $alcoholConsumption = trim($_POST['alcohol_consumption'] ?? 'Non-Drinker');
+                    $exerciseFrequency = trim($_POST['exercise_frequency'] ?? 'Occasional');
+                    $dietType = trim($_POST['diet_type'] ?? 'Balanced Diet');
+
+                    $bloodType = trim($_POST['blood_type'] ?? '');
+                    $philhealthNo = trim($_POST['philhealth_number'] ?? '');
+
+                    try {
+                        $pdo->exec("CREATE TABLE IF NOT EXISTS resident_health_profiles (
+                            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                            resident_id BIGINT UNSIGNED NOT NULL UNIQUE,
+                            height DOUBLE(5,2) NULL,
+                            weight DOUBLE(5,2) NULL,
+                            blood_pressure VARCHAR(20) NULL,
+                            heart_rate INT NULL,
+                            temperature DOUBLE(4,1) NULL,
+                            last_checkup_date DATE NULL,
+                            smoking_status VARCHAR(50) NULL,
+                            alcohol_consumption VARCHAR(50) NULL,
+                            exercise_frequency VARCHAR(50) NULL,
+                            diet_type VARCHAR(50) NULL,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                            INDEX idx_rhp_resident (resident_id)
+                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+                        try {
+                            $pdo->exec("ALTER TABLE resident_health_profiles ADD COLUMN blood_pressure VARCHAR(20) NULL AFTER weight");
+                            $pdo->exec("ALTER TABLE resident_health_profiles ADD COLUMN heart_rate INT NULL AFTER blood_pressure");
+                            $pdo->exec("ALTER TABLE resident_health_profiles ADD COLUMN temperature DOUBLE(4,1) NULL AFTER heart_rate");
+                            $pdo->exec("ALTER TABLE resident_health_profiles ADD COLUMN last_checkup_date DATE NULL AFTER temperature");
+                            $pdo->exec("ALTER TABLE resident_health_profiles ADD COLUMN smoking_status VARCHAR(50) NULL AFTER last_checkup_date");
+                            $pdo->exec("ALTER TABLE resident_health_profiles ADD COLUMN alcohol_consumption VARCHAR(50) NULL AFTER smoking_status");
+                            $pdo->exec("ALTER TABLE resident_health_profiles ADD COLUMN exercise_frequency VARCHAR(50) NULL AFTER alcohol_consumption");
+                            $pdo->exec("ALTER TABLE resident_health_profiles ADD COLUMN diet_type VARCHAR(50) NULL AFTER exercise_frequency");
+                        } catch (Throwable $tCols) {}
+                    } catch (Throwable $tHp) {}
+
+                    $chkStmt = $pdo->prepare("SELECT id FROM resident_health_profiles WHERE resident_id = :rid LIMIT 1");
+                    $chkStmt->execute(['rid' => $residentId]);
+                    $existingHpId = $chkStmt->fetchColumn();
+
+                    if ($existingHpId) {
+                        $upStmt = $pdo->prepare("UPDATE resident_health_profiles SET 
+                            height = :h, weight = :w, blood_pressure = :bp, heart_rate = :hr,
+                            temperature = :temp, last_checkup_date = :lcd, smoking_status = :smoke,
+                            alcohol_consumption = :alc, exercise_frequency = :ex, diet_type = :dt,
+                            updated_at = NOW()
+                            WHERE resident_id = :rid");
+                        $upStmt->execute([
+                            'h' => $height, 'w' => $weight, 'bp' => $bloodPressure, 'hr' => $heartRate,
+                            'temp' => $temperature, 'lcd' => $lastCheckupDate, 'smoke' => $smokingStatus,
+                            'alc' => $alcoholConsumption, 'ex' => $exerciseFrequency, 'dt' => $dietType,
+                            'rid' => $residentId
+                        ]);
+                    } else {
+                        $insStmt = $pdo->prepare("INSERT INTO resident_health_profiles (
+                            resident_id, height, weight, blood_pressure, heart_rate, temperature,
+                            last_checkup_date, smoking_status, alcohol_consumption, exercise_frequency, diet_type, updated_at
+                        ) VALUES (
+                            :rid, :h, :w, :bp, :hr, :temp, :lcd, :smoke, :alc, :ex, :dt, NOW()
+                        )");
+                        $insStmt->execute([
+                            'rid' => $residentId, 'h' => $height, 'w' => $weight, 'bp' => $bloodPressure,
+                            'hr' => $heartRate, 'temp' => $temperature, 'lcd' => $lastCheckupDate,
+                            'smoke' => $smokingStatus, 'alc' => $alcoholConsumption, 'ex' => $exerciseFrequency,
+                            'dt' => $dietType
+                        ]);
+                    }
+
+                    if (!empty($bloodType) || !empty($philhealthNo)) {
+                        try {
+                            $upRes = $pdo->prepare("UPDATE residents SET blood_type = :bt, philhealth_id = :ph WHERE id = :rid");
+                            $upRes->execute(['bt' => $bloodType, 'ph' => $philhealthNo, 'rid' => $residentId]);
+                        } catch (Throwable $tRes) {}
+                    }
+
+                    $_SESSION['resident_dashboard_message_flash'] = 'Your Health Profile has been updated successfully!';
+                    header('Location: ResidentDashboard.php?tab=profile');
                     exit;
                 }
             }
@@ -268,6 +380,68 @@ if (!empty($pdo)) {
             );
             $statement->execute(['resident_id' => $residentId]);
             $dependents = $statement->fetchAll(PDO::FETCH_ASSOC);
+
+            // Hydrate resident_health_profiles record
+            $healthProfile = null;
+            try {
+                $hpStmt = $pdo->prepare("SELECT * FROM resident_health_profiles WHERE resident_id = :rid LIMIT 1");
+                $hpStmt->execute(['rid' => $residentId]);
+                $healthProfile = $hpStmt->fetch(PDO::FETCH_ASSOC);
+                if (!$healthProfile) {
+                    try {
+                        $hpStmt2 = $pdo->prepare("SELECT * FROM resident_health_profile WHERE resident_id = :rid LIMIT 1");
+                        $hpStmt2->execute(['rid' => $residentId]);
+                        $healthProfile = $hpStmt2->fetch(PDO::FETCH_ASSOC);
+                    } catch (Throwable $tHp2) {}
+                }
+            } catch (Throwable $tHp) {}
+        }
+
+        // Hydrate RHU Doctors, Nurses, and Healthcare Staff list with working schedule
+        $rhuStaffList = [];
+        $staffBookingsPerDate = [];
+        try {
+            $staffStmt = $pdo->query("
+                SELECT s.id AS staff_id, s.staff_type, s.specialization,
+                       COALESCE(s.work_days, 'Monday, Tuesday, Wednesday, Thursday, Friday') AS work_days,
+                       COALESCE(s.shift_start, '08:00:00') AS shift_start,
+                       COALESCE(s.shift_end, '17:00:00') AS shift_end,
+                       COALESCE(s.is_on_duty, 1) AS is_on_duty,
+                       COALESCE(u.first_name, 'RHU Staff') AS first_name,
+                       COALESCE(u.last_name, '') AS last_name,
+                       u.email, s.phone_number
+                FROM staff s
+                LEFT JOIN users u ON s.user_id = u.id
+                ORDER BY s.id ASC
+            ");
+            $rhuStaffList = $staffStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            $bookingStmt = $pdo->query("
+                SELECT physician_id, consultation_date, COUNT(*) AS total_booked
+                FROM consultations
+                WHERE consultation_date >= CURDATE()
+                GROUP BY physician_id, consultation_date
+            ");
+            while ($row = $bookingStmt->fetch(PDO::FETCH_ASSOC)) {
+                $pid = (int)$row['physician_id'];
+                $cdate = $row['consultation_date'];
+                $staffBookingsPerDate[$pid][$cdate] = (int)$row['total_booked'];
+            }
+        } catch (Throwable $tSt) {}
+
+        if (empty($rhuStaffList)) {
+            $rhuStaffList = [
+                ['staff_id' => 1, 'first_name' => 'Dr. Maria', 'last_name' => 'Santos', 'staff_type' => 'Rural Health Physician', 'specialization' => 'General Medicine', 'work_days' => 'Monday, Tuesday, Wednesday, Thursday, Friday', 'shift_start' => '08:00:00', 'shift_end' => '17:00:00', 'is_on_duty' => 1],
+                ['staff_id' => 2, 'first_name' => 'Dr. Joseph', 'last_name' => 'Ramos', 'staff_type' => 'Rural Health Physician', 'specialization' => 'General Practice', 'work_days' => 'Monday, Tuesday, Wednesday, Thursday, Friday', 'shift_start' => '08:00:00', 'shift_end' => '17:00:00', 'is_on_duty' => 1],
+                ['staff_id' => 3, 'first_name' => 'Midwife Rosario', 'last_name' => 'Peralta', 'staff_type' => 'Rural Health Midwife', 'specialization' => 'Maternal & OB-GYN Care', 'work_days' => 'Monday, Tuesday, Wednesday, Thursday, Friday', 'shift_start' => '08:00:00', 'shift_end' => '17:00:00', 'is_on_duty' => 1],
+                ['staff_id' => 4, 'first_name' => 'RN Clara', 'last_name' => 'Mendez', 'staff_type' => 'Public Health Nurse', 'specialization' => 'Community Health & Vaccination', 'work_days' => 'Monday, Tuesday, Wednesday, Thursday, Friday', 'shift_start' => '08:00:00', 'shift_end' => '17:00:00', 'is_on_duty' => 1],
+                ['staff_id' => 5, 'first_name' => 'RN Jose', 'last_name' => 'Figueroa', 'staff_type' => 'Medical Technologist', 'specialization' => 'Clinical Pathology & Lab Work', 'work_days' => 'Monday, Tuesday, Wednesday, Thursday, Friday', 'shift_start' => '08:00:00', 'shift_end' => '17:00:00', 'is_on_duty' => 1],
+                ['staff_id' => 6, 'first_name' => 'Ramon', 'last_name' => 'Villareal', 'staff_type' => 'Sanitary Inspector', 'specialization' => 'Environmental Health & Inspection', 'work_days' => 'Monday, Tuesday, Wednesday, Thursday, Friday', 'shift_start' => '08:00:00', 'shift_end' => '17:00:00', 'is_on_duty' => 1]
+            ];
+        }
+
+        if (function_exists('mergeJsonScheduleIntoStaffList')) {
+            $rhuStaffList = mergeJsonScheduleIntoStaffList($rhuStaffList, $pdo);
         }
     } catch (Exception $ex) {
         error_log("ResidentDashboard DB Hydration Error: " . $ex->getMessage());
@@ -289,6 +463,7 @@ $age = residentAge($resident['date_of_birth'] ?? null);
 
 $tabs = [
     'home' => ['Overview', 'home'],
+    'profile' => ['My Profile', 'user'],
     'records' => ['Health Records', 'file-text'],
     'immunization' => ['Immunization', 'shield-check'],
     'certificates' => ['Certificates', 'award'],
@@ -734,7 +909,205 @@ $events = [
         </div>
       </section>
 
-      <!-- 2. HEALTH RECORDS TAB -->
+      <!-- 2. PROFILE TAB (Health Profile & Medical Info) -->
+      <section data-tab-panel="profile" class="hidden space-y-6">
+
+        <!-- Header Card -->
+        <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+          <div class="flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div class="flex items-center gap-4">
+              <div class="h-16 w-16 shrink-0 rounded-2xl bg-gradient-to-tr from-teal-600 to-emerald-500 flex items-center justify-center text-white font-extrabold text-xl shadow-md">
+                <?= esc($initials) ?>
+              </div>
+              <div>
+                <h2 class="text-xl font-extrabold text-slate-900 tracking-tight">
+                  <?= esc(trim(($resident['first_name'] ?? '') . ' ' . ($resident['middle_name'] ?? '') . ' ' . ($resident['last_name'] ?? ''))) ?>
+                </h2>
+                <p class="text-xs text-slate-500 font-medium mt-0.5">
+                  <?= esc($resident['gender'] ?? 'Resident') ?> • <?= $age === null ? 'Age N/A' : esc($age) . ' years old' ?> • <?= esc($resident['barangay'] ?? 'Nasugbu') ?>
+                </p>
+                <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                  <span class="inline-flex items-center gap-1 rounded-md bg-teal-50 px-2.5 py-1 font-bold text-teal-700 border border-teal-200/60">
+                    <i data-lucide="droplet" class="h-3.5 w-3.5 text-teal-600"></i> Blood Type: <?= esc($healthProfile['blood_type'] ?? ($resident['blood_type'] ?? 'Unknown')) ?>
+                  </span>
+                  <span class="inline-flex items-center gap-1 rounded-md bg-sky-50 px-2.5 py-1 font-bold text-sky-700 border border-sky-200/60">
+                    <i data-lucide="credit-card" class="h-3.5 w-3.5 text-sky-600"></i> PhilHealth #: <?= esc($healthProfile['philhealth_number'] ?? ($resident['philhealth_id'] ?? 'Not Recorded')) ?>
+                  </span>
+                  <?php if (!empty($healthProfile['bmi'])): ?>
+                    <span class="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2.5 py-1 font-bold text-emerald-700 border border-emerald-200/60">
+                      <i data-lucide="activity" class="h-3.5 w-3.5 text-emerald-600"></i> BMI: <?= esc($healthProfile['bmi']) ?>
+                    </span>
+                  <?php endif; ?>
+                </div>
+              </div>
+            </div>
+            <button type="button" onclick="document.getElementById('edit-health-profile-modal').classList.remove('hidden')" class="inline-flex items-center gap-2 rounded-xl bg-teal-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-teal-700 transition-all cursor-pointer">
+              <i data-lucide="edit-3" class="h-4 w-4"></i> Edit Health Profile
+            </button>
+          </div>
+        </div>
+
+        <!-- Detailed Information Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+          <!-- Card 1: Personal & Demographic Info -->
+          <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div class="flex items-center gap-2">
+                <div class="h-8 w-8 rounded-lg bg-teal-50 text-teal-600 flex items-center justify-center">
+                  <i data-lucide="user" class="h-4 w-4"></i>
+                </div>
+                <h3 class="text-sm font-bold text-slate-800">Personal & Contact Details</h3>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-4 text-xs">
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Full Name</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= esc(($resident['first_name'] ?? '') . ' ' . ($resident['last_name'] ?? '')) ?></p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Date of Birth</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= esc($resident['date_of_birth'] ?? 'Not specified') ?></p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Gender / Civil Status</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= esc($resident['gender'] ?? '—') ?> / <?= esc($resident['civil_status'] ?? '—') ?></p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Contact Number</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= esc($resident['contact_number'] ?? 'Not specified') ?></p>
+              </div>
+              <div class="col-span-2">
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Email Address</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= esc($resident['email'] ?? 'Not specified') ?></p>
+              </div>
+              <div class="col-span-2">
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Barangay & Address</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= esc($resident['barangay'] ?? 'Nasugbu') ?>, <?= esc($resident['address'] ?? '') ?></p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 2: Physical Vitals & Measurements -->
+          <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div class="flex items-center gap-2">
+                <div class="h-8 w-8 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center">
+                  <i data-lucide="heart-pulse" class="h-4 w-4"></i>
+                </div>
+                <h3 class="text-sm font-bold text-slate-800">Vitals & Physical Attributes</h3>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-4 text-xs">
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Height (cm)</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= !empty($healthProfile['height']) ? esc($healthProfile['height']) . ' cm' : 'Not recorded' ?></p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Weight (kg)</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= !empty($healthProfile['weight']) ? esc($healthProfile['weight']) . ' kg' : 'Not recorded' ?></p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Blood Pressure</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= esc(!empty($healthProfile['blood_pressure']) ? $healthProfile['blood_pressure'] : (!empty($healthProfile['bp']) ? $healthProfile['bp'] : '120/80 mmHg')) ?></p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Heart Rate (bpm)</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= !empty($healthProfile['heart_rate']) ? esc($healthProfile['heart_rate']) . ' bpm' : '72 bpm' ?></p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Temperature (°C)</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= !empty($healthProfile['temperature']) ? esc($healthProfile['temperature']) . ' °C' : '36.5 °C' ?></p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Last Checkup Date</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= esc($healthProfile['last_checkup_date'] ?? date('Y-m-d')) ?></p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Smoking Status</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= esc($healthProfile['smoking_status'] ?? 'Non-Smoker') ?></p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Alcohol Consumption</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= esc($healthProfile['alcohol_consumption'] ?? 'Non-Drinker') ?></p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Exercise Frequency</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= esc($healthProfile['exercise_frequency'] ?? 'Occasional (1-2x/week)') ?></p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Diet Type</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= esc($healthProfile['diet_type'] ?? 'Balanced Diet') ?></p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 3: Medical History & Clinical Notes -->
+          <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div class="flex items-center gap-2">
+                <div class="h-8 w-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+                  <i data-lucide="shield-alert" class="h-4 w-4"></i>
+                </div>
+                <h3 class="text-sm font-bold text-slate-800">Medical Conditions & History</h3>
+              </div>
+            </div>
+            <div class="space-y-3 text-xs">
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Known Allergies</p>
+                <p class="font-medium text-slate-800 mt-0.5 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <?= esc($healthProfile['allergies'] ?? 'No known allergies recorded.') ?>
+                </p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Chronic Conditions / Illnesses</p>
+                <p class="font-medium text-slate-800 mt-0.5 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <?= esc($healthProfile['chronic_conditions'] ?? 'No pre-existing chronic conditions recorded.') ?>
+                </p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Current Prescribed Medications</p>
+                <p class="font-medium text-slate-800 mt-0.5 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <?= esc($healthProfile['current_medications'] ?? 'None currently listed.') ?>
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 4: Emergency Contacts & PhilHealth -->
+          <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div class="flex items-center gap-2">
+                <div class="h-8 w-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                  <i data-lucide="phone-call" class="h-4 w-4"></i>
+                </div>
+                <h3 class="text-sm font-bold text-slate-800">Emergency Contacts & PhilHealth</h3>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-4 text-xs">
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Emergency Contact Person</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= esc($healthProfile['emergency_contact_name'] ?? 'Not set') ?></p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Relationship</p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= esc($healthProfile['emergency_contact_relationship'] ?? 'Family Member') ?></p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">Emergency Phone Number</p>
+                <p class="font-bold text-slate-800 mt-0.5 text-teal-700"><?= esc($healthProfile['emergency_contact_phone'] ?? 'Not set') ?></p>
+              </div>
+              <div>
+                <p class="text-slate-400 font-semibold uppercase text-[10px]">PhilHealth Number</p>
+                <p class="font-bold text-slate-800 mt-0.5 font-mono text-emerald-700"><?= esc(!empty($healthProfile['philhealth_number']) ? $healthProfile['philhealth_number'] : (!empty($resident['philhealth_id']) ? $resident['philhealth_id'] : 'Not set')) ?></p>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- 3. HEALTH RECORDS TAB -->
       <section data-tab-panel="records" class="hidden space-y-6">
         <div class="flex items-center justify-between">
           <h3 class="text-lg font-bold text-slate-900">Health Records & Consultations</h3>
@@ -1170,28 +1543,71 @@ $events = [
     </div>
   </div>
 
-  <!-- OPD Appointment Modal -->
-  <div id="appointment-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs hidden p-4">
-    <div class="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4">
+  <!-- OPD / RHU Appointment Modal -->
+  <div id="appointment-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm hidden">
+    <div class="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl space-y-5 max-h-[92vh] overflow-y-auto">
       <div class="flex items-center justify-between border-b border-slate-100 pb-3">
-        <h3 class="text-sm font-bold text-slate-900">Request OPD Consultation</h3>
-        <button type="button" onclick="document.getElementById('appointment-modal').classList.add('hidden')" class="text-slate-400 hover:text-slate-600">
+        <div class="flex items-center gap-2.5">
+          <div class="h-9 w-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center">
+            <i data-lucide="calendar-plus" class="h-5 w-5"></i>
+          </div>
+          <div>
+            <h3 class="text-base font-extrabold text-slate-900">Book RHU Appointment</h3>
+            <p class="text-xs text-slate-500">Select appointment type, date, and available doctor or healthcare provider.</p>
+          </div>
+        </div>
+        <button type="button" onclick="document.getElementById('appointment-modal').classList.add('hidden')" class="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">
           <i data-lucide="x" class="h-5 w-5"></i>
         </button>
       </div>
-      <form method="post" action="ResidentDashboard.php?tab=records" class="space-y-3 text-xs">
+
+      <form method="post" action="ResidentDashboard.php?tab=records" class="space-y-4 text-xs">
         <input type="hidden" name="form" value="appointment_request">
+        <input type="hidden" name="csrf_token" value="<?= esc($dashboardCsrf) ?>">
+
+        <!-- 1. Select Appointment Category / Type -->
         <div>
-          <label class="block font-bold text-slate-700 mb-1">Chief Complaint / Purpose</label>
-          <input type="text" name="chief_complaint" required class="w-full rounded-xl border border-slate-200 px-3 py-2.5 font-medium focus:outline-none focus:ring-2 focus:ring-teal-500" placeholder="e.g. Fever, Checkup, Cough">
+          <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1.5">Type of Appointment *</label>
+          <select id="appointment_type_select" name="appointment_type" required onchange="filterAvailableStaff()" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-bold text-slate-800 outline-none focus:border-teal-500 focus:bg-white transition-all">
+            <option value="General Medical Consultation">🩺 General Medical Consultation (Physician / Doctor)</option>
+            <option value="Prenatal & Maternal Care">🤰 Prenatal & Maternal Care (Midwife / Doctor)</option>
+            <option value="Child Vaccination & Immunization">💉 Child Vaccination & Immunization (Nurse / Midwife)</option>
+            <option value="Laboratory Test & Blood Work">🔬 Laboratory & Blood Test (Medical Technologist)</option>
+            <option value="Sanitary Inspection & Clearance">📋 Sanitary Inspection & Clearance (Sanitary Inspector)</option>
+            <option value="General Health Checkup">🏥 General Health Checkup (Public Health Nurse)</option>
+          </select>
         </div>
+
+        <!-- 2. Select Appointment Date -->
         <div>
-          <label class="block font-bold text-slate-700 mb-1">Preferred Date</label>
-          <input type="date" name="preferred_date" required value="<?= date('Y-m-d') ?>" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 font-medium focus:outline-none focus:ring-2 focus:ring-teal-500">
+          <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1.5">Preferred Appointment Date *</label>
+          <input type="date" id="appointment_date_input" name="preferred_date" required min="<?= date('Y-m-d') ?>" value="<?= date('Y-m-d') ?>" onchange="filterAvailableStaff()" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-800 outline-none focus:border-teal-500 focus:bg-white transition-all">
         </div>
-        <div class="pt-2 flex gap-2">
-          <button type="button" onclick="document.getElementById('appointment-modal').classList.add('hidden')" class="flex-1 rounded-xl border border-slate-200 py-2.5 font-bold text-slate-600 hover:bg-slate-50">Cancel</button>
-          <button type="submit" class="flex-1 rounded-xl bg-teal-600 py-2.5 font-bold text-white hover:bg-teal-700">Submit Request</button>
+
+        <!-- 3. Available Healthcare Provider (Doctor / Nurse / Staff) -->
+        <div>
+          <div class="flex items-center justify-between mb-1.5">
+            <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px]">Assigned Available Doctor / Staff *</label>
+            <span class="text-[10px] text-teal-600 font-bold" id="staff_count_badge">Loading available staff...</span>
+          </div>
+          <div id="staff_selection_container" class="space-y-2 max-h-48 overflow-y-auto p-1 border border-slate-100 rounded-2xl bg-slate-50/50">
+            <!-- Dynamically populated by filterAvailableStaff() JavaScript -->
+          </div>
+        </div>
+
+        <!-- 4. Chief Complaint / Notes -->
+        <div>
+          <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1.5">Chief Complaint / Reason for Visit *</label>
+          <textarea name="chief_complaint" rows="3" required placeholder="Describe your medical symptoms, reason for consultation, or assistance needed..." class="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white transition-all"></textarea>
+        </div>
+
+        <div class="pt-2 flex items-center justify-end gap-2 border-t border-slate-100">
+          <button type="button" onclick="document.getElementById('appointment-modal').classList.add('hidden')" class="rounded-xl px-4 py-2.5 font-bold text-slate-600 hover:bg-slate-100 transition-colors">
+            Cancel
+          </button>
+          <button type="submit" class="rounded-xl bg-teal-600 px-5 py-2.5 font-bold text-white shadow-md hover:bg-teal-700 transition-colors">
+            Confirm & Book Appointment
+          </button>
         </div>
       </form>
     </div>
@@ -1200,6 +1616,137 @@ $events = [
   <script>
     (() => {
       lucide.createIcons();
+
+      let allRhuStaff = <?= json_encode($rhuStaffList ?? [], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+      const staffBookings = <?= json_encode($staffBookingsPerDate ?? [], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+
+      if (!allRhuStaff || allRhuStaff.length === 0) {
+        allRhuStaff = [
+          { staff_id: 1, first_name: 'Dr. Maria', last_name: 'Santos', staff_type: 'Rural Health Physician', specialization: 'General Medicine', work_days: 'Monday, Tuesday, Wednesday, Thursday, Friday', is_on_duty: 1 },
+          { staff_id: 2, first_name: 'Clara', last_name: 'Reyes', staff_type: 'Public Health Nurse', specialization: 'Community Health', work_days: 'Monday, Tuesday, Wednesday, Thursday, Friday', is_on_duty: 1 },
+          { staff_id: 3, first_name: 'Ana', last_name: 'Gomez', staff_type: 'Rural Health Midwife', specialization: 'Maternal Care', work_days: 'Monday, Tuesday, Wednesday, Thursday, Friday', is_on_duty: 1 },
+          { staff_id: 4, first_name: 'Roberto', last_name: 'Dizon', staff_type: 'Medical Technologist', specialization: 'Clinical Pathology', work_days: 'Monday, Tuesday, Wednesday, Thursday, Friday', is_on_duty: 1 },
+          { staff_id: 5, first_name: 'Elena', last_name: 'Cruz', staff_type: 'Sanitary Inspector', specialization: 'Environmental Health', work_days: 'Monday, Tuesday, Wednesday, Thursday, Friday', is_on_duty: 1 }
+        ];
+      }
+
+      window.filterAvailableStaff = function() {
+        const typeEl = document.getElementById('appointment_type_select');
+        const dateEl = document.getElementById('appointment_date_input');
+        const container = document.getElementById('staff_selection_container');
+        const badgeEl = document.getElementById('staff_count_badge');
+
+        if (!container || !typeEl || !dateEl) return;
+        container.innerHTML = '';
+
+        const selectedType = typeEl.value;
+        const selectedDate = dateEl.value;
+        const lowerType = selectedType.toLowerCase();
+
+        let filteredStaff = allRhuStaff;
+        if (lowerType.includes('prenatal') || lowerType.includes('maternal')) {
+          filteredStaff = allRhuStaff.filter(s => {
+            const st = ((s.staff_type || s.position || '') + ' ' + (s.specialization || '')).toLowerCase();
+            return st.includes('midwife') || st.includes('nurse') || st.includes('physician') || st.includes('doctor') || st.includes('maternal') || st.includes('ob');
+          });
+        } else if (lowerType.includes('vaccination') || lowerType.includes('immunization') || lowerType.includes('child')) {
+          filteredStaff = allRhuStaff.filter(s => {
+            const st = ((s.staff_type || s.position || '') + ' ' + (s.specialization || '')).toLowerCase();
+            return st.includes('nurse') || st.includes('midwife') || st.includes('vaccin');
+          });
+        } else if (lowerType.includes('laboratory') || lowerType.includes('blood') || lowerType.includes('medtech')) {
+          filteredStaff = allRhuStaff.filter(s => {
+            const st = ((s.staff_type || s.position || '') + ' ' + (s.specialization || '')).toLowerCase();
+            return st.includes('tech') || st.includes('med') || st.includes('pathology') || st.includes('lab');
+          });
+        } else if (lowerType.includes('sanitary') || lowerType.includes('inspection')) {
+          filteredStaff = allRhuStaff.filter(s => {
+            const st = ((s.staff_type || s.position || '') + ' ' + (s.specialization || '')).toLowerCase();
+            return st.includes('sanitary') || st.includes('inspector') || st.includes('environment');
+          });
+        } else if (lowerType.includes('checkup') || lowerType.includes('nurse')) {
+          filteredStaff = allRhuStaff.filter(s => {
+            const st = ((s.staff_type || s.position || '') + ' ' + (s.specialization || '')).toLowerCase();
+            return st.includes('nurse') || st.includes('midwife') || st.includes('physician') || st.includes('doctor');
+          });
+        } else if (lowerType.includes('medical') || lowerType.includes('consultation') || lowerType.includes('doctor') || lowerType.includes('physician')) {
+          filteredStaff = allRhuStaff.filter(s => {
+            const st = ((s.staff_type || s.position || '') + ' ' + (s.specialization || '')).toLowerCase();
+            return st.includes('physician') || st.includes('doctor') || st.includes('officer') || st.includes('medicine');
+          });
+        }
+
+        if (!filteredStaff || filteredStaff.length === 0) {
+          filteredStaff = allRhuStaff;
+        }
+
+        if (badgeEl) {
+          badgeEl.textContent = `${filteredStaff.length} provider(s) available`;
+        }
+
+        if (filteredStaff.length === 0) {
+          container.innerHTML = '<div class="p-3 text-center text-slate-400 text-xs font-semibold">No registered staff found for this category.</div>';
+          return;
+        }
+
+        const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        let selectedDayName = 'Monday';
+        if (selectedDate) {
+          const parts = selectedDate.split('-');
+          if (parts.length === 3) {
+            const dObj = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+            selectedDayName = daysOfWeek[dObj.getDay()];
+          }
+        }
+
+        let hasCheckedFirst = false;
+
+        filteredStaff.forEach((staff, index) => {
+          const pid = parseInt(staff.staff_id);
+          const bookedOnDate = (staffBookings[pid] && staffBookings[pid][selectedDate]) ? parseInt(staffBookings[pid][selectedDate]) : 0;
+          const isOnDuty = parseInt(staff.is_on_duty || 1) === 1;
+          const workDaysStr = staff.work_days || 'Monday, Tuesday, Wednesday, Thursday, Friday';
+          const isScheduled = workDaysStr.toLowerCase().includes(selectedDayName.toLowerCase());
+
+          let statusBadge = '';
+          let isDisabled = false;
+
+          if (!isOnDuty) {
+            statusBadge = `<span class="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200">🔴 Off Duty (On Leave)</span>`;
+            isDisabled = true;
+          } else if (!isScheduled) {
+            statusBadge = `<span class="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">⚠️ Not Scheduled (${selectedDayName})</span>`;
+            isDisabled = true;
+          } else {
+            statusBadge = `<span class="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/60">🟢 Available (${bookedOnDate} booked)</span>`;
+          }
+
+          const label = document.createElement('label');
+          label.className = `flex items-center justify-between p-3 rounded-xl border ${isDisabled ? 'border-slate-200 bg-slate-100/70 opacity-60 cursor-not-allowed' : 'border-slate-200 bg-slate-50 hover:bg-teal-50/50 hover:border-teal-300 cursor-pointer'} transition-all`;
+          
+          let checkAttr = '';
+          if (!isDisabled && !hasCheckedFirst) {
+            checkAttr = 'checked';
+            hasCheckedFirst = true;
+          }
+          let disabledAttr = isDisabled ? 'disabled' : '';
+
+          label.innerHTML = `
+            <div class="flex items-center gap-3">
+              <input type="radio" name="physician_id" value="${staff.staff_id}" ${checkAttr} ${disabledAttr} class="text-teal-600 focus:ring-teal-500 h-4 w-4">
+              <div>
+                <p class="font-bold text-slate-800 text-xs">${staff.first_name || ''} ${staff.last_name || ''}</p>
+                <p class="text-[10px] text-slate-500 font-medium">${staff.staff_type || 'RHU Staff'} ${staff.specialization ? '• ' + staff.specialization : ''}</p>
+                <p class="text-[9px] text-slate-400 font-mono">📅 Duty: ${workDaysStr}</p>
+              </div>
+            </div>
+            <div>${statusBadge}</div>
+          `;
+          container.appendChild(label);
+        });
+      };
+
+      filterAvailableStaff();
 
       const sidebar = document.getElementById('sidebar');
       const sidebarOverlay = document.getElementById('sidebar-overlay');
@@ -1211,12 +1758,13 @@ $events = [
       const panels = document.querySelectorAll('[data-tab-panel]');
 
       const tabTitles = {
-        'home': 'Resident Dashboard',
+        'home': 'Overview',
+        'profile': 'My Health Profile',
         'records': 'Health Records',
-        'immunization': 'Immunization History',
-        'certificates': 'My Certificates',
+        'immunization': 'Immunization Records',
+        'certificates': 'Health Certificates',
         'family': 'Family Members',
-        'events': 'Events & Health Programs',
+        'events': 'Events & Programs',
         'contact': 'Contact RHU',
         'emergency': 'Emergency & Referral'
       };
@@ -1374,5 +1922,147 @@ $events = [
       window.addEventListener('resize', updateScrollProgress);
     })();
   </script>
+  <!-- EDIT HEALTH PROFILE MODAL -->
+  <div id="edit-health-profile-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
+    <div class="w-full max-w-xl rounded-3xl bg-white p-6 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div class="flex items-center gap-2.5">
+          <div class="h-9 w-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center">
+            <i data-lucide="user-cog" class="h-5 w-5"></i>
+          </div>
+          <div>
+            <h3 class="text-base font-extrabold text-slate-900">Update Health Profile</h3>
+            <p class="text-xs text-slate-500">Edit medical information for your RHU resident record.</p>
+          </div>
+        </div>
+        <button type="button" onclick="document.getElementById('edit-health-profile-modal').classList.add('hidden')" class="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">
+          <i data-lucide="x" class="h-5 w-5"></i>
+        </button>
+      </div>
+
+      <form method="post" action="ResidentDashboard.php" class="space-y-4 text-xs">
+        <input type="hidden" name="form" value="update_health_profile">
+        <input type="hidden" name="csrf_token" value="<?= esc($dashboardCsrf) ?>">
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Blood Type</label>
+            <select name="blood_type" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-semibold text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+              <?php foreach (['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', 'Unknown'] as $bt): ?>
+                <option value="<?= $bt ?>" <?= (($healthProfile['blood_type'] ?? ($resident['blood_type'] ?? '')) === $bt) ? 'selected' : '' ?>><?= $bt ?></option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">PhilHealth Number</label>
+            <input type="text" name="philhealth_number" value="<?= esc($healthProfile['philhealth_number'] ?? ($resident['philhealth_id'] ?? '')) ?>" placeholder="e.g. 12-345678901-2" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Height (cm)</label>
+            <input type="number" step="0.1" name="height" value="<?= esc($healthProfile['height'] ?? '') ?>" placeholder="e.g. 165" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Weight (kg)</label>
+            <input type="number" step="0.1" name="weight" value="<?= esc($healthProfile['weight'] ?? '') ?>" placeholder="e.g. 62.5" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Blood Pressure</label>
+            <input type="text" name="blood_pressure" value="<?= esc($healthProfile['blood_pressure'] ?? ($healthProfile['bp'] ?? '120/80')) ?>" placeholder="e.g. 120/80" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Heart Rate (bpm)</label>
+            <input type="number" name="heart_rate" value="<?= esc($healthProfile['heart_rate'] ?? '72') ?>" placeholder="e.g. 72" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Temperature (°C)</label>
+            <input type="number" step="0.1" name="temperature" value="<?= esc($healthProfile['temperature'] ?? '36.5') ?>" placeholder="e.g. 36.5" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Last Checkup Date</label>
+            <input type="date" name="last_checkup_date" value="<?= esc($healthProfile['last_checkup_date'] ?? date('Y-m-d')) ?>" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Smoking Status</label>
+            <select name="smoking_status" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-semibold text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+              <?php foreach (['Non-Smoker', 'Former Smoker', 'Occasional Smoker', 'Daily Smoker'] as $ss): ?>
+                <option value="<?= $ss ?>" <?= (($healthProfile['smoking_status'] ?? '') === $ss) ? 'selected' : '' ?>><?= $ss ?></option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Alcohol Consumption</label>
+            <select name="alcohol_consumption" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-semibold text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+              <?php foreach (['Non-Drinker', 'Occasional Drinker', 'Moderate Drinker', 'Heavy Drinker'] as $ac): ?>
+                <option value="<?= $ac ?>" <?= (($healthProfile['alcohol_consumption'] ?? '') === $ac) ? 'selected' : '' ?>><?= $ac ?></option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Exercise Frequency</label>
+            <select name="exercise_frequency" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-semibold text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+              <?php foreach (['Sedentary (No exercise)', 'Occasional (1-2x/week)', 'Active (3-5x/week)', 'Daily Athlete'] as $ef): ?>
+                <option value="<?= $ef ?>" <?= (($healthProfile['exercise_frequency'] ?? '') === $ef) ? 'selected' : '' ?>><?= $ef ?></option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Diet Type</label>
+            <input type="text" name="diet_type" value="<?= esc($healthProfile['diet_type'] ?? 'Balanced Diet') ?>" placeholder="e.g. Low Sodium, Diabetic, Balanced" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+          </div>
+        </div>
+
+        <div>
+          <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Known Allergies</label>
+          <textarea name="allergies" rows="2" placeholder="List food, drug, or environmental allergies..." class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white"><?= esc($healthProfile['allergies'] ?? '') ?></textarea>
+        </div>
+
+        <div>
+          <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Chronic Conditions / Illnesses</label>
+          <textarea name="chronic_conditions" rows="2" placeholder="Hypertension, Asthma, Diabetes, etc." class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white"><?= esc($healthProfile['chronic_conditions'] ?? '') ?></textarea>
+        </div>
+
+        <div>
+          <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Current Prescribed Medications</label>
+          <textarea name="current_medications" rows="2" placeholder="e.g. Amlodipine 5mg once daily..." class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white"><?= esc($healthProfile['current_medications'] ?? '') ?></textarea>
+        </div>
+
+        <div class="grid grid-cols-3 gap-3 border-t border-slate-100 pt-3">
+          <div>
+            <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Emergency Contact Person</label>
+            <input type="text" name="emergency_contact_name" value="<?= esc($healthProfile['emergency_contact_name'] ?? '') ?>" placeholder="Name" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+          </div>
+          <div>
+            <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Relationship</label>
+            <input type="text" name="emergency_contact_relationship" value="<?= esc($healthProfile['emergency_contact_relationship'] ?? '') ?>" placeholder="Spouse, Mother, etc." class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+          </div>
+          <div>
+            <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Emergency Phone #</label>
+            <input type="text" name="emergency_contact_phone" value="<?= esc($healthProfile['emergency_contact_phone'] ?? '') ?>" placeholder="0917XXXXXXX" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+          </div>
+        </div>
+
+        <div class="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
+          <button type="button" onclick="document.getElementById('edit-health-profile-modal').classList.add('hidden')" class="rounded-xl px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors">
+            Cancel
+          </button>
+          <button type="submit" class="rounded-xl bg-teal-600 px-5 py-2.5 text-xs font-bold text-white shadow-md hover:bg-teal-700 transition-colors">
+            Save Health Profile
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
 </body>
 </html>
+

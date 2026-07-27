@@ -1,6 +1,7 @@
 <?php
 if (session_status() === PHP_SESSION_NONE) session_start();
-if (empty($_SESSION['rhu_staff_login']) || strtoupper((string)($_SESSION['rhu_staff_login']['staff_type'] ?? '')) !== 'SANITARY_INSPECTOR') {
+$stType = strtoupper((string)($_SESSION['rhu_staff_login']['staff_type'] ?? ''));
+if (empty($_SESSION['rhu_staff_login']) || ($stType !== 'SANITARY_INSPECTOR' && !str_contains($stType, 'SANITARY') && !str_contains($stType, 'INSPECTOR'))) {
     header('Location: RHULogin.php');
     exit;
 }
@@ -28,17 +29,25 @@ if (!empty($pdo)) {
         }
     }
 }
-$inspections = [
-  ['SI001','Sunrise Eatery','Food Establishment','Halang','2026-06-08','2026-07-08','conditional',78,2,['Minor pest activity found','Handwashing station needs soap']],
-  ['SI002','Mabini Public Market','Public Market','Mabini','2026-06-07','2026-06-21','failed',55,5,['Improper waste segregation','Blocked drainage channel','No valid sanitary permit']],
-  ['SI003','San Jose Water Refilling','Water Refilling','San Jose','2026-06-05','2026-09-05','passed',98,0,['Valid sanitary permit','Water analysis up to date']],
-  ['SI004','Poblacion Day Care','Child Care Center','Poblacion','2026-06-04','2026-09-04','passed',94,0,['Clean facilities','Adequate handwashing stations']],
-];
-$certs = [['HC-2026-041','Health Certificate','Maria Santos','Food Handler','2026-06-10','2027-06-10',50,'issued'],['HC-2026-040','Sanitary Permit','Mabini Bakery','Business Renewal','2026-06-09','2027-06-09',300,'issued'],['HC-2026-039','Health Certificate','Jose Reyes','Employment','2026-06-08','2027-06-08',50,'issued']];
-$diseases = [['DR-01','Dengue Fever','A90','Week 23',['Halang','Mabini'],8,true,'Barangay clean-up and larval source reduction',['0–4'=>1,'5–14'=>3,'15–49'=>4]],['DR-02','Leptospirosis','A27','Week 23',['Poblacion'],2,false,'Health education and water safety monitoring',['15–49'=>2]],['DR-03','Acute Bloody Diarrhea','A09','Week 22',['San Jose'],3,false,'Water source investigation',['0–4'=>2,'5–14'=>1]]];
-// Live database records replace all seeded dashboard rows.
+$sanitaryStaffId = (int)($_SESSION['rhu_staff_login']['staff_id'] ?? 0);
+$sanitaryUserId = (int)($_SESSION['rhu_staff_login']['id'] ?? $_SESSION['rhu_staff_login']['user_id'] ?? 0);
+$sanitaryConsultations = [];
+
 $inspections = $certs = $diseases = [];
 if (!empty($pdo)) {
+    try {
+        $sanStmt = $pdo->prepare("
+            SELECT c.id, CONCAT(r.first_name, ' ', r.last_name) AS patientName, TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) as age, r.gender, c.chief_complaint as chiefComplaint, r.barangay, c.consultation_date as date, c.consultation_notes
+            FROM consultations c
+            JOIN residents r ON c.resident_id = r.id
+            LEFT JOIN staff doc_s ON c.physician_id = doc_s.id
+            WHERE (c.physician_id = :sid OR doc_s.user_id = :uid OR c.chief_complaint LIKE '%Sanitary%' OR c.chief_complaint LIKE '%Inspection%' OR c.chief_complaint LIKE '%Clearance%')
+            ORDER BY c.id DESC
+        ");
+        $sanStmt->execute(['sid' => $sanitaryStaffId, 'uid' => $sanitaryUserId]);
+        $sanitaryConsultations = $sanStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Exception $e) {}
+
     foreach ($pdo->query("SELECT * FROM sanitation_inspections ORDER BY inspection_date DESC, id DESC")->fetchAll(PDO::FETCH_ASSOC) as $row) {
         $rawStatus = strtolower($row['status']);
         $status = str_contains($rawStatus, 'compliant') && !str_contains($rawStatus, 'non') ? 'passed' : (str_contains($rawStatus, 'conditional') || str_contains($rawStatus, 'follow') ? 'conditional' : 'failed');
@@ -76,7 +85,7 @@ $passed=count(array_filter($inspections,fn($i)=>$i[6]==='passed')); $failed=coun
                 </div>
             </div>
             <div class="flex items-center gap-2">
-                <span class="hidden rounded-lg bg-white/10 px-3 py-1.5 text-sm font-semibold sm:block">♥ Ramon Villareal</span>
+                <span class="hidden rounded-lg bg-white/10 px-3 py-1.5 text-sm font-semibold sm:block">♥ <?= e($_SESSION['rhu_staff_login']['name'] ?? 'Sanitary Inspector') ?></span>
                 <a href="StaffLogout.php" data-staff-logout class="staff-logout-trigger" title="Log Out"><span class="staff-logout-glyph" aria-hidden="true"></span><span>Log out</span></a>
             </div>
         </div>
@@ -100,6 +109,31 @@ $passed=count(array_filter($inspections,fn($i)=>$i[6]==='passed')); $failed=coun
                     </p>
                 </div>
                 <a class="ml-auto rounded-lg bg-red-600 px-3 py-1.5 text-xs text-white" href="?tab=inspections">Review</a>
+            </section>
+
+            <section class="rounded-xl border border-teal-200 bg-white p-5 shadow-sm space-y-3">
+                <div class="flex justify-between items-center border-b border-teal-100 pb-2">
+                    <h2 class="font-bold text-sm text-teal-950 flex items-center gap-2">
+                        ♢ Received Sanitary Inspection & Clearance Requests (<?= count($sanitaryConsultations) ?>)
+                    </h2>
+                    <span class="text-[10px] font-bold bg-teal-50 text-teal-700 px-2 py-0.5 rounded-full border border-teal-200">Live Queue</span>
+                </div>
+                <?php if (empty($sanitaryConsultations)): ?>
+                    <p class="text-xs text-gray-400 italic py-2 text-center">No sanitary inspection requests assigned to you yet.</p>
+                <?php else: ?>
+                    <div class="divide-y divide-gray-100 max-h-64 overflow-y-auto">
+                        <?php foreach ($sanitaryConsultations as $sc): ?>
+                            <div class="py-2.5 flex items-center justify-between text-xs gap-2">
+                                <div>
+                                    <p class="font-bold text-gray-900"><?= e($sc['patientName']) ?> <span class="text-gray-500 font-normal">(<?= e($sc['age'] ?? 'N/A') ?>y • <?= e($sc['gender'] ?? 'N/A') ?> • <?= e($sc['barangay']) ?>)</span></p>
+                                    <p class="text-teal-700 font-medium"><?= e($sc['chiefComplaint']) ?></p>
+                                    <p class="text-[10px] text-gray-400 font-mono">📅 Requested Date: <?= e($sc['date']) ?></p>
+                                </div>
+                                <span class="px-2 py-1 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg font-bold text-[10px] shrink-0">Pending Inspection</span>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
             </section>
 
             <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">

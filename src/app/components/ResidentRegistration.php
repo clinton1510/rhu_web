@@ -28,28 +28,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         if (isset($pdo) && $pdo) {
             try {
-                $pdo->beginTransaction();
-                $stmt = $pdo->prepare('SELECT id FROM users WHERE email = :email LIMIT 1');
-                $stmt->execute(['email' => $email]);
-                if ($stmt->fetch()) {
-                  throw new Exception('An account with that email address already exists.');
+                // Ensure password_hash column exists on residents table
+                try {
+                    $pdo->exec("ALTER TABLE residents ADD COLUMN password_hash VARCHAR(255) NULL AFTER email");
+                } catch (Throwable $t) {
+                    // Ignore if column already exists
                 }
 
-                $roleId = $pdo->query("SELECT id FROM roles WHERE UPPER(name) = 'RESIDENT' LIMIT 1")->fetchColumn();
-                if (!$roleId) {
-                  $ins = $pdo->prepare('INSERT INTO roles (name, description) VALUES (:name, :desc)');
-                  $ins->execute(['name' => 'RESIDENT', 'desc' => 'Resident role']);
-                  $roleId = (int)$pdo->lastInsertId();
+                $pdo->beginTransaction();
+                $stmt = $pdo->prepare('SELECT id FROM residents WHERE email = :email LIMIT 1');
+                $stmt->execute(['email' => $email]);
+                if ($stmt->fetch()) {
+                  throw new Exception('A resident account with that email address already exists.');
                 }
 
                 $password_hash = password_hash($password, PASSWORD_DEFAULT);
-                $username = preg_replace('/[^a-z0-9._-]/i', '_', strtolower($email));
-                $stmt = $pdo->prepare('INSERT INTO users (username, email, password_hash, first_name, last_name, role_id, is_active, created_at) VALUES (:username, :email, :password_hash, :first_name, :last_name, :role_id, 1, NOW())');
-                $stmt->execute(['username' => $username, 'email' => $email, 'password_hash' => $password_hash, 'first_name' => $first_name, 'last_name' => $last_name, 'role_id' => $roleId]);
-                $userId = (int)$pdo->lastInsertId();
-
-                $stmt = $pdo->prepare('INSERT INTO residents (first_name, last_name, date_of_birth, contact_number, email, address, barangay, philhealth_id, created_at) VALUES (:first_name, :last_name, :dob, :phone, :email, :address, :barangay, :philhealth_id, NOW())');
-                $stmt->execute(['first_name' => $first_name, 'last_name' => $last_name, 'dob' => $dob ?: null, 'phone' => $phone, 'email' => $email, 'address' => $address, 'barangay' => $barangay, 'philhealth_id' => $philhealth_no]);
+                $stmt = $pdo->prepare('INSERT INTO residents (first_name, last_name, date_of_birth, contact_number, email, password_hash, address, barangay, philhealth_id, is_active, created_at) VALUES (:first_name, :last_name, :dob, :phone, :email, :password_hash, :address, :barangay, :philhealth_id, 1, NOW())');
+                $stmt->execute([
+                    'first_name' => $first_name,
+                    'last_name' => $last_name,
+                    'dob' => $dob ?: null,
+                    'phone' => $phone,
+                    'email' => $email,
+                    'password_hash' => $password_hash,
+                    'address' => $address,
+                    'barangay' => $barangay,
+                    'philhealth_id' => $philhealth_no
+                ]);
 
                 $pdo->commit();
                 $_SESSION['resident_registration_flash'] = 'Account created successfully! You can now sign in to your Resident Portal.';
@@ -68,6 +73,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $flash = $_SESSION['resident_registration_flash'] ?? '';
 unset($_SESSION['resident_registration_flash']);
+
+$dbBarangays = [];
+if (isset($pdo) && $pdo) {
+    try {
+        $dbBarangays = $pdo->query("SELECT name FROM barangays ORDER BY name ASC")->fetchAll(PDO::FETCH_COLUMN) ?: [];
+    } catch (PDOException $eBrgy) {
+        error_log('Barangay fetch error: ' . $eBrgy->getMessage());
+    }
+}
+if (empty($dbBarangays)) {
+    $dbBarangays = ['Aga','Anilao','Balaytigue','Balibago','Banilad','Barangay 1 (Pob.)','Barangay 2 (Pob.)','Barangay 3 (Pob.)','Barangay 4 (Pob.)','Bilaran','Bucana','Bulihan','Calayo','Catandaan','Cogunan','Dayap','Halang','Kaylaway','Looc','Lumbangan','Mabini','Nagsabaran','Natipuan','Pantalan','Poblacion','Wawa'];
+}
 ?>
 <!doctype html>
 <html lang="en">
@@ -190,7 +207,12 @@ unset($_SESSION['resident_registration_flash']);
 
             <div class="space-y-1.5">
               <label class="block text-xs font-bold text-slate-300 uppercase tracking-wider">Barangay *</label>
-              <input required name="barangay" value="<?= e($_POST['barangay'] ?? '') ?>" class="w-full rounded-xl border border-white/15 bg-white/10 px-4 py-3 text-sm text-white placeholder-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20 outline-none transition-all" placeholder="e.g. Halang / Pob. 1">
+              <select required name="barangay" class="w-full rounded-xl border border-white/15 bg-slate-900/90 px-4 py-3 text-sm text-white focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20 outline-none transition-all">
+                <option value="" class="bg-slate-900 text-slate-400">-- Select Barangay --</option>
+                <?php foreach ($dbBarangays as $bName): ?>
+                  <option value="<?= e($bName) ?>" <?= ($_POST['barangay'] ?? '') === $bName ? 'selected' : '' ?> class="bg-slate-900 text-white"><?= e($bName) ?></option>
+                <?php endforeach; ?>
+              </select>
             </div>
           </div>
 

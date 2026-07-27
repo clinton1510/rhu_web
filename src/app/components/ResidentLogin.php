@@ -18,52 +18,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         if (isset($pdo) && $pdo) {
             try {
-                $stmt = $pdo->prepare('SELECT id, username, email, password_hash, first_name, last_name, role_id FROM users WHERE email = :email LIMIT 1');
-                $stmt->execute(['email' => $email]);
-                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                // Ensure password_hash column exists on residents table
+                try {
+                    $pdo->exec("ALTER TABLE residents ADD COLUMN password_hash VARCHAR(255) NULL AFTER email");
+                } catch (Throwable $t) {
+                    // Ignore if column already exists
+                }
 
-                if ($user) {
-                    if (password_verify($password, $user['password_hash']) || $password === 'resident123' || $password === 'password') {
-                        $_SESSION['user'] = ['id' => (int)$user['id'], 'username' => $user['username'], 'email' => $user['email'], 'first_name' => $user['first_name'], 'last_name' => $user['last_name'], 'role_id' => (int)$user['role_id']];
-                        try {
-                            $rstmt = $pdo->prepare('SELECT id FROM residents WHERE email = :email LIMIT 1');
-                            $rstmt->execute(['email' => $email]);
-                            $resId = $rstmt->fetchColumn();
-                            if (!$resId && !empty($user['last_name'])) {
-                                $rstmt = $pdo->prepare('SELECT id, first_name FROM residents WHERE last_name = :last_name ORDER BY id');
-                                $rstmt->execute(['last_name' => trim((string)$user['last_name'])]);
-                                $accountFirstName = strtolower(trim((string)($user['first_name'] ?? '')));
-                                $matches = array_values(array_filter(
-                                    $rstmt->fetchAll(PDO::FETCH_ASSOC),
-                                    static function (array $candidate) use ($accountFirstName): bool {
-                                        $residentFirstName = strtolower(trim((string)($candidate['first_name'] ?? '')));
-                                        return $residentFirstName !== ''
-                                            && ($accountFirstName === $residentFirstName
-                                                || str_starts_with($accountFirstName, $residentFirstName . ' ')
-                                                || str_starts_with($residentFirstName, $accountFirstName . ' '));
-                                    }
-                                ));
-                                if (count($matches) === 1) $resId = (int)$matches[0]['id'];
-                            }
-                            if ($resId) $_SESSION['user']['resident_id'] = (int)$resId;
-                        } catch (Exception $e) {}
+                // Direct authentication query from residents table
+                $stmt = $pdo->prepare('SELECT id, first_name, last_name, email, password_hash FROM residents WHERE LOWER(email) = LOWER(:email) LIMIT 1');
+                $stmt->execute(['email' => $email]);
+                $resident = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($resident) {
+                    $validPassword = false;
+                    if (!empty($resident['password_hash']) && password_verify($password, $resident['password_hash'])) {
+                        $validPassword = true;
+                    } elseif ($password === 'resident123' || $password === 'password') {
+                        $validPassword = true;
+                    }
+
+                    if ($validPassword) {
+                        unset($_SESSION['rhu_admin_authenticated'], $_SESSION['rhu_staff_login'], $_SESSION['bhw_user']);
+                        session_regenerate_id(true);
+
+                        $_SESSION['user'] = [
+                            'id' => (int)$resident['id'],
+                            'resident_id' => (int)$resident['id'],
+                            'username' => strtok($resident['email'], '@'),
+                            'email' => $resident['email'],
+                            'first_name' => $resident['first_name'],
+                            'last_name' => $resident['last_name'],
+                            'role_id' => 1
+                        ];
+
                         header('Location: ResidentDashboard.php');
                         exit;
                     } else {
                         $error = 'Invalid password for this resident account.';
                     }
                 } else {
-                    if (str_contains($email, 'resident') || $email === 'resident@nasugbu.rhu.gov.ph') {
-                        $hash = password_hash($password ?: 'resident123', PASSWORD_BCRYPT);
-                        $insUser = $pdo->prepare('INSERT INTO users (username, email, password_hash, first_name, last_name, role_id, is_active) VALUES (:uname, :email, :hash, "Maria", "Santos", 1, 1)');
-                        $insUser->execute(['uname' => strtok($email, '@'), 'email' => $email, 'hash' => $hash]);
-                        $userId = $pdo->lastInsertId();
+                    // Fallback for default demo resident account if not yet created in DB
+                    if ($email === 'resident@nasugbu.rhu.gov.ph' || str_contains($email, 'resident')) {
+                        $hash = password_hash($password ?: 'resident123', PASSWORD_DEFAULT);
+                        $insRes = $pdo->prepare('INSERT INTO residents (first_name, last_name, date_of_birth, gender, civil_status, contact_number, email, password_hash, address, barangay, blood_type, is_active, created_at) VALUES ("Maria", "Santos", "1990-05-15", "Female", "Single", "09171234567", :email, :hash, "Poblacion", "Halang", "O+", 1, NOW())');
+                        $insRes->execute(['email' => $email, 'hash' => $hash]);
+                        $residentId = (int)$pdo->lastInsertId();
 
-                        $insRes = $pdo->prepare('INSERT INTO residents (first_name, last_name, date_of_birth, gender, civil_status, contact_number, email, address, barangay, blood_type) VALUES ("Maria", "Santos", "1990-05-15", "Female", "Single", "09171234567", :email, "Poblacion", "Halang", "O+")');
-                        $insRes->execute(['email' => $email]);
-                        $residentId = $pdo->lastInsertId();
+                        unset($_SESSION['rhu_admin_authenticated'], $_SESSION['rhu_staff_login'], $_SESSION['bhw_user']);
+                        session_regenerate_id(true);
 
-                        $_SESSION['user'] = ['id' => (int)$userId, 'resident_id' => (int)$residentId, 'username' => strtok($email, '@'), 'email' => $email, 'first_name' => 'Maria', 'last_name' => 'Santos', 'role_id' => 1];
+                        $_SESSION['user'] = [
+                            'id' => $residentId,
+                            'resident_id' => $residentId,
+                            'username' => strtok($email, '@'),
+                            'email' => $email,
+                            'first_name' => 'Maria',
+                            'last_name' => 'Santos',
+                            'role_id' => 1
+                        ];
                         header('Location: ResidentDashboard.php');
                         exit;
                     } else {
@@ -192,7 +205,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <input type="checkbox" class="rounded border-slate-700 bg-slate-800 text-emerald-500 focus:ring-emerald-400/30">
                             <span>Remember me</span>
                         </label>
-                        <a href="ResidentLogin.php?step=forgot" class="font-semibold text-emerald-400 hover:text-emerald-300 hover:underline transition-colors">Forgot password?</a>
+                        <a href="ForgotPassword.php?portal=resident" class="font-semibold text-emerald-400 hover:text-emerald-300 hover:underline transition-colors">Forgot password?</a>
                     </div>
 
                     <!-- Submit Button -->

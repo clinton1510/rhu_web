@@ -275,3 +275,220 @@ if (!function_exists('portalSettings')) {
         ];
     }
 }
+
+if (!function_exists('getStaffSchedulesFilePath')) {
+    function getStaffSchedulesFilePath(): string {
+        $paths = [
+            __DIR__ . '/../../data/staff_schedules.json',
+            __DIR__ . '/../data/staff_schedules.json',
+            dirname(__DIR__, 2) . '/data/staff_schedules.json',
+            sys_get_temp_dir() . '/staff_schedules.json'
+        ];
+        foreach ($paths as $path) {
+            if (file_exists($path)) {
+                return $path;
+            }
+        }
+        $primary = __DIR__ . '/../../data/staff_schedules.json';
+        $dir = dirname($primary);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0777, true);
+        }
+        return $primary;
+    }
+}
+
+if (!function_exists('loadStaffSchedulesFromJson')) {
+    function loadStaffSchedulesFromJson(): array {
+        $file = getStaffSchedulesFilePath();
+        if (file_exists($file)) {
+            $content = @file_get_contents($file);
+            if ($content) {
+                $decoded = json_decode($content, true);
+                if (is_array($decoded)) {
+                    return $decoded;
+                }
+            }
+        }
+        return [];
+    }
+}
+
+if (!function_exists('saveStaffScheduleToJson')) {
+    function saveStaffScheduleToJson(int $staffId, array $scheduleData): bool {
+        if ($staffId <= 0) return false;
+        
+        $schedules = loadStaffSchedulesFromJson();
+        $key = (string)$staffId;
+        $existing = $schedules[$key] ?? [];
+        
+        $merged = array_merge($existing, $scheduleData, [
+            'staff_id' => $staffId,
+            'updated_at' => date('Y-m-d H:i:s')
+        ]);
+        
+        $schedules[$key] = $merged;
+        
+        $file = getStaffSchedulesFilePath();
+        $jsonStr = json_encode($schedules, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        
+        $res = @file_put_contents($file, $jsonStr) !== false;
+        
+        $secondary = __DIR__ . '/../data/staff_schedules.json';
+        if (is_dir(dirname($secondary)) && $secondary !== $file) {
+            @file_put_contents($secondary, $jsonStr);
+        }
+        return $res;
+    }
+}
+
+if (!function_exists('syncStaffFromDatabaseToJson')) {
+    function syncStaffFromDatabaseToJson(?PDO $pdo): array {
+        $existingSchedules = loadStaffSchedulesFromJson();
+        if (!$pdo) return $existingSchedules;
+
+        try {
+            try {
+                $pdo->exec("ALTER TABLE staff ADD COLUMN work_days VARCHAR(100) DEFAULT 'Monday, Tuesday, Wednesday, Thursday, Friday'");
+                $pdo->exec("ALTER TABLE staff ADD COLUMN shift_start TIME DEFAULT '08:00:00'");
+                $pdo->exec("ALTER TABLE staff ADD COLUMN shift_end TIME DEFAULT '17:00:00'");
+                $pdo->exec("ALTER TABLE staff ADD COLUMN is_on_duty TINYINT(1) DEFAULT 1");
+            } catch (Throwable $tCols) {}
+
+            $stmt = $pdo->query("
+                SELECT s.id AS staff_id, s.staff_type, s.specialization,
+                       COALESCE(s.work_days, 'Monday, Tuesday, Wednesday, Thursday, Friday') AS db_work_days,
+                       COALESCE(s.shift_start, '08:00:00') AS db_shift_start,
+                       COALESCE(s.shift_end, '17:00:00') AS db_shift_end,
+                       COALESCE(s.is_on_duty, 1) AS db_is_on_duty,
+                       COALESCE(u.first_name, '') AS first_name,
+                       COALESCE(u.last_name, '') AS last_name,
+                       u.email, s.phone_number
+                FROM staff s
+                LEFT JOIN users u ON s.user_id = u.id
+                ORDER BY s.id ASC
+            ");
+
+            $dbStaff = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+            if (!empty($dbStaff)) {
+                $newSchedules = [];
+                foreach ($dbStaff as $row) {
+                    $sid = (int)$row['staff_id'];
+                    $key = (string)$sid;
+                    $existing = $existingSchedules[$key] ?? [];
+
+                    $fName = trim($row['first_name']);
+                    $lName = trim($row['last_name']);
+                    $fullName = trim($fName . ' ' . $lName);
+                    if ($fullName === '') {
+                        $fullName = 'RHU Staff #' . $sid;
+                        $fName = 'RHU';
+                        $lName = 'Staff #' . $sid;
+                    }
+
+                    $sType = !empty($row['staff_type']) ? $row['staff_type'] : 'Rural Health Staff';
+                    $spec = !empty($row['specialization']) ? $row['specialization'] : 'General Healthcare';
+
+                    $newSchedules[$key] = [
+                        'staff_id' => $sid,
+                        'first_name' => $fName,
+                        'last_name' => $lName,
+                        'name' => $fullName,
+                        'staff_type' => $sType,
+                        'position' => $sType,
+                        'specialization' => $spec,
+                        'email' => $row['email'] ?? '',
+                        'phone_number' => $row['phone_number'] ?? '',
+                        'work_days' => $existing['work_days'] ?? $row['db_work_days'],
+                        'shift_start' => $existing['shift_start'] ?? $row['db_shift_start'],
+                        'shift_end' => $existing['shift_end'] ?? $row['db_shift_end'],
+                        'is_on_duty' => isset($existing['is_on_duty']) ? (int)$existing['is_on_duty'] : (int)$row['db_is_on_duty'],
+                        'updated_at' => $existing['updated_at'] ?? date('Y-m-d H:i:s')
+                    ];
+                }
+
+                $file = getStaffSchedulesFilePath();
+                $jsonStr = json_encode($newSchedules, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+                @file_put_contents($file, $jsonStr);
+                $secondary = __DIR__ . '/../data/staff_schedules.json';
+                if (is_dir(dirname($secondary)) && $secondary !== $file) {
+                    @file_put_contents($secondary, $jsonStr);
+                }
+                return $newSchedules;
+            }
+        } catch (Throwable $e) {
+            error_log('syncStaffFromDatabaseToJson error: ' . $e->getMessage());
+        }
+
+        return $existingSchedules;
+    }
+}
+
+if (!function_exists('mergeJsonScheduleIntoStaffList')) {
+    function mergeJsonScheduleIntoStaffList(array $staffList, ?PDO $pdo = null): array {
+        if ($pdo) {
+            $jsonSchedules = syncStaffFromDatabaseToJson($pdo);
+        } else {
+            $jsonSchedules = loadStaffSchedulesFromJson();
+        }
+        
+        if (empty($staffList) && !empty($jsonSchedules)) {
+            $formatted = [];
+            foreach ($jsonSchedules as $sched) {
+                $sStart = !empty($sched['shift_start']) ? date('g:i A', strtotime($sched['shift_start'])) : '8:00 AM';
+                $sEnd = !empty($sched['shift_end']) ? date('g:i A', strtotime($sched['shift_end'])) : '5:00 PM';
+                $formatted[] = array_merge($sched, [
+                    'id' => 'ST-' . ($sched['staff_id'] ?? 1),
+                    'staff_id' => (int)($sched['staff_id'] ?? 1),
+                    'first_name' => $sched['first_name'] ?? 'RHU',
+                    'last_name' => $sched['last_name'] ?? 'Staff',
+                    'name' => $sched['name'] ?? trim(($sched['first_name'] ?? '') . ' ' . ($sched['last_name'] ?? '')),
+                    'position' => $sched['position'] ?? $sched['staff_type'] ?? 'Rural Health Staff',
+                    'staff_type' => $sched['staff_type'] ?? $sched['position'] ?? 'Rural Health Staff',
+                    'specialization' => $sched['specialization'] ?? 'General Medicine',
+                    'workDays' => $sched['work_days'] ?? 'Monday, Tuesday, Wednesday, Thursday, Friday',
+                    'work_days' => $sched['work_days'] ?? 'Monday, Tuesday, Wednesday, Thursday, Friday',
+                    'shiftHours' => "{$sStart} - {$sEnd}",
+                    'rawShiftStart' => $sched['shift_start'] ?? '08:00:00',
+                    'rawShiftEnd' => $sched['shift_end'] ?? '17:00:00',
+                    'isOnDuty' => !empty($sched['is_on_duty']),
+                    'is_on_duty' => !empty($sched['is_on_duty']) ? 1 : 0
+                ]);
+            }
+            return $formatted;
+        }
+
+        if (empty($jsonSchedules)) return $staffList;
+        
+        foreach ($staffList as &$staff) {
+            $sid = (int)($staff['staff_id'] ?? $staff['id'] ?? 0);
+            $key = (string)$sid;
+            if ($sid > 0 && isset($jsonSchedules[$key])) {
+                $sched = $jsonSchedules[$key];
+                if (isset($sched['work_days'])) {
+                    $staff['work_days'] = $sched['work_days'];
+                    $staff['workDays'] = $sched['work_days'];
+                }
+                if (isset($sched['shift_start'])) {
+                    $staff['shift_start'] = $sched['shift_start'];
+                    $staff['rawShiftStart'] = $sched['shift_start'];
+                }
+                if (isset($sched['shift_end'])) {
+                    $staff['shift_end'] = $sched['shift_end'];
+                    $staff['rawShiftEnd'] = $sched['shift_end'];
+                }
+                if (isset($sched['is_on_duty'])) {
+                    $staff['is_on_duty'] = (int)$sched['is_on_duty'];
+                    $staff['isOnDuty'] = (bool)$sched['is_on_duty'];
+                }
+                $sStart = !empty($staff['shift_start']) ? date('g:i A', strtotime($staff['shift_start'])) : '8:00 AM';
+                $sEnd = !empty($staff['shift_end']) ? date('g:i A', strtotime($staff['shift_end'])) : '5:00 PM';
+                $staff['shiftHours'] = "{$sStart} - {$sEnd}";
+            }
+        }
+        unset($staff);
+        return $staffList;
+    }
+}
+
+

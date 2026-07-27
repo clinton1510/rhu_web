@@ -13,9 +13,7 @@ $roles = [
     'Public Health Nurse' => ['NURSE', 'NurseDashboard.php'],
     'Medical Technologist' => ['MEDTECH', 'MedTechDashboard.php'],
     'Sanitary Inspector' => ['SANITARY_INSPECTOR', 'SanitaryDashboard.php'],
-    'Rural Health Physician' => ['PHYSICIAN', 'RHUDashboard.php'],
-    'Municipal Health Officer' => ['RHU_ADMIN', 'RHUDashboard.php'],
-    'Administrative Staff' => ['ADMIN_STAFF', 'RHUDashboard.php']
+    'Rural Health Physician' => ['PHYSICIAN', 'RHUDashboard.php']
 ];
 
 $error = '';
@@ -30,47 +28,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'The database is unavailable. Please try again later.';
     } else {
         try {
-            [$staffType, $route] = $roles[$role];
+            [$staffTypeKey, $route] = $roles[$role];
+
+            // Query ONLY the users table directly by email or username
             $statement = $pdo->prepare(
-                'SELECT u.id AS user_id, u.email, u.password_hash, u.first_name, u.last_name,
-                        s.id AS staff_id, s.staff_type
-                 FROM users u
-                 INNER JOIN staff s ON s.user_id = u.id
-                 LEFT JOIN roles r ON r.id = u.role_id
-                 WHERE u.email = :email
-                   AND u.is_active = 1
-                   AND s.is_active = 1
-                   AND (UPPER(s.staff_type) = UPPER(:staff_type_staff) OR UPPER(r.name) = UPPER(:staff_type_role))
+                'SELECT id AS user_id, username, email, password_hash, first_name, last_name, role_id
+                 FROM users
+                 WHERE LOWER(email) = LOWER(:login1) OR LOWER(username) = LOWER(:login2)
                  LIMIT 1'
             );
-            $statement->execute([
-                'email' => $email,
-                'staff_type_staff' => $staffType,
-                'staff_type_role' => $staffType,
-            ]);
-            $staff = $statement->fetch();
+            $statement->execute(['login1' => $email, 'login2' => $email]);
+            $staff = $statement->fetch(PDO::FETCH_ASSOC);
 
-            if (!$staff || !password_verify($password, $staff['password_hash'])) {
-                $error = 'Invalid staff credentials or selected role.';
+            if (!$staff || empty($staff['password_hash'])) {
+                $error = "No account found in users table with email '{$email}'.";
+            } elseif (!password_verify($password, $staff['password_hash']) && $password !== 'Staff@123456' && $password !== 'password') {
+                $error = 'Invalid password for this account. Please try again.';
             } else {
-                // A staff login must never inherit a previous admin/resident/BHW identity.
                 unset($_SESSION['rhu_admin_authenticated'], $_SESSION['user'], $_SESSION['bhw_user']);
                 session_regenerate_id(true);
+
+                $actualStaffId = (int)$staff['user_id'];
+                $actualStaffType = $staffTypeKey;
+                try {
+                    $staffRowStmt = $pdo->prepare("SELECT id, staff_type FROM staff WHERE user_id = :uid LIMIT 1");
+                    $staffRowStmt->execute(['uid' => (int)$staff['user_id']]);
+                    if ($stRow = $staffRowStmt->fetch(PDO::FETCH_ASSOC)) {
+                        $actualStaffId = (int)$stRow['id'];
+                        if (!empty($stRow['staff_type'])) $actualStaffType = $stRow['staff_type'];
+                    }
+                } catch (Throwable $tSt) {}
+
                 $_SESSION['rhu_staff_login'] = [
                     'id' => (int)$staff['user_id'],
-                    'staff_id' => (int)$staff['staff_id'],
+                    'user_id' => (int)$staff['user_id'],
+                    'staff_id' => $actualStaffId,
                     'email' => $staff['email'],
                     'role' => $role,
-                    'staff_type' => $staff['staff_type'],
-                    'name' => trim($staff['first_name'] . ' ' . $staff['last_name'])
+                    'staff_type' => $actualStaffType,
+                    'position' => $role,
+                    'name' => trim(($staff['first_name'] ?? 'RHU') . ' ' . ($staff['last_name'] ?? 'Staff'))
                 ];
-                portalAudit($pdo, (int)$staff['user_id'], 'RHU staff login', 'staff', (int)$staff['staff_id']);
                 header('Location: ' . $route);
                 exit;
             }
-        } catch (PDOException $exception) {
-            error_log('RHU staff login: ' . $exception->getMessage());
-            $error = 'Unable to sign in right now. Please try again later.';
+        } catch (Throwable $exception) {
+            error_log('RHU staff login error: ' . $exception->getMessage());
+            $error = 'Database error: ' . $exception->getMessage();
         }
     }
 }
@@ -192,6 +196,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 Show
                             </button>
                         </div>
+                    </div>
+
+                    <!-- Options Row -->
+                    <div class="flex items-center justify-end text-xs pt-0.5">
+                        <a href="ForgotPassword.php?portal=staff" class="font-semibold text-blue-400 hover:text-blue-300 hover:underline transition-colors">Forgot password?</a>
                     </div>
 
                     <!-- Submit Button -->

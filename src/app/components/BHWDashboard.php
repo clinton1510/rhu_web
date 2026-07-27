@@ -98,7 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-function formatDate(string $date): string { return date('F j, Y', strtotime($date)); }
+function formatDate(?string $date): string { return !empty($date) && strtotime($date) !== false ? date('F j, Y', strtotime($date)) : ''; }
 ?>
 <!DOCTYPE html>
 <html lang="en">

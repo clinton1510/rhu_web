@@ -1,6 +1,7 @@
 <?php
 if (session_status() === PHP_SESSION_NONE) session_start();
-if (empty($_SESSION['rhu_staff_login']) || strtoupper((string)($_SESSION['rhu_staff_login']['staff_type'] ?? '')) !== 'MEDTECH') {
+$stType = strtoupper((string)($_SESSION['rhu_staff_login']['staff_type'] ?? ''));
+if (empty($_SESSION['rhu_staff_login']) || ($stType !== 'MEDTECH' && !str_contains($stType, 'MEDTECH') && !str_contains($stType, 'TECHNOLOGIST'))) {
     header('Location: RHULogin.php');
     exit;
 }
@@ -9,31 +10,24 @@ function esc($v): string { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF
 $tabs = ['overview'=>'Overview','rapid'=>'Rapid Tests','referrals'=>'Specimen Referrals','supplies'=>'Test Supplies','reports'=>'Reports'];
 $tab = $_GET['tab'] ?? 'overview'; if (!isset($tabs[$tab])) $tab = 'overview';
 $modal = $_GET['modal'] ?? '';
-$tests = [
- ['RDT-2026-041','Lourdes Bautista',42,'Halang','Blood Glucose (Glucometer)','9.2 mmol/L','high','3.9–5.5 mmol/L','Dr. Maria C. Santos','2026-06-10'],
- ['RDT-2026-040','Cristina Magpayo',28,'San Jose','HBsAg Rapid Test','Non-reactive','normal','Non-reactive','Midwife Rosario Peralta','2026-06-10'],
- ['RDT-2026-039','Cristina Magpayo',28,'San Jose','VDRL Rapid Test','Non-reactive','normal','Non-reactive','Midwife Rosario Peralta','2026-06-10'],
- ['RDT-2026-038','Jasmin Villafuerte',17,'Poblacion','Pregnancy Test (HCG Urine)','Positive','notable','N/A','Midwife Rosario Peralta','2026-06-10'],
- ['RDT-2026-037','Maricel Sta. Cruz',19,'San Jose','Urinalysis Dipstick','Nitrite +, WBC +','abnormal','Negative all','Dr. Maria C. Santos','2026-06-09'],
- ['RDT-2026-036','Carlos Soriano',38,'Halang','Dengue NS1 Antigen','Positive','abnormal','Negative','Dr. Joseph T. Ramos','2026-06-09'],
- ['RDT-2026-035','Pedro Reyes',52,'Mabini','HIV Rapid Test','Non-reactive','normal','Non-reactive','Dr. Maria C. Santos','2026-06-09'],
- ['RDT-2026-034','Danilo Espiritu',44,'Poblacion','TB Sputum (for referral)','Collected — pending GeneXpert','pending','N/A','Dr. Maria C. Santos','2026-06-08'],
-];
-$referrals = [
- ['SPR-2026-012','Danilo Espiritu',44,'TB Sputum — GeneXpert MTB/RIF','Batangas Provincial Hospital DOTS Center','2026-06-08','pending','Awaiting','Suspected PTB, smear negative'],
- ['SPR-2026-011','Carmelita Pascua',38,'TB Sputum — Drug Sensitivity Test','Batangas Provincial Hospital','2026-06-01','result-received','GeneXpert: MTB detected, Rifampicin sensitive','TB Relapse case'],
- ['SPR-2026-010','Ricardo Dimayuga',65,'Troponin I & 12-lead ECG','Batangas Provincial Hospital — Cardiology','2026-06-10','pending','Awaiting','Chest pain, rule out ACS'],
- ['SPR-2026-009','Natividad Soriano',55,'HbA1c, Lipid Profile, Creatinine','CHD IV-A Reference Lab','2026-06-05','result-received','HbA1c: 8.4%, LDL: 4.1 mmol/L','DM monitoring'],
- ['SPR-2026-008','Florencia Ramos',35,'Pap Smear','Batangas Provincial Hospital — OB-GYN','2026-05-28','result-received','NILM — Normal','Routine prenatal screening'],
-];
-$supplies = [
- ['HBsAg Rapid Test Kit','Serology RDT',12,'kits',20,'2026-08-15','low'],['HIV Rapid Test (Determine)','Serology RDT',20,'kits',10,'2027-01-31','adequate'],['VDRL Rapid Test','Serology RDT',5,'kits',10,'2026-07-31','critical'],['Dengue NS1 Rapid Test','Serology RDT',18,'kits',10,'2026-10-31','adequate'],['Pregnancy Test (HCG Urine)','Immunology RDT',35,'kits',15,'2026-12-31','adequate'],['Malaria RDT','Parasitology RDT',8,'kits',10,'2026-09-30','low'],['Urinalysis Dipsticks','Urinalysis',180,'strips',50,'2026-09-30','adequate'],['Blood Glucose Strips','Clinical Chem',220,'strips',100,'2026-11-30','adequate'],['Specimen Transport Medium','Specimen',6,'sets',10,'2026-08-31','critical'],
-];
+$medtechStaffId = (int)($_SESSION['rhu_staff_login']['staff_id'] ?? 0);
+$medtechUserId = (int)($_SESSION['rhu_staff_login']['id'] ?? $_SESSION['rhu_staff_login']['user_id'] ?? 0);
+$medtechConsultations = [];
 
-// Live database data only.
-$tests = $referrals = $supplies = [];
-$consultationOptions = $residentOptions = $staffOptions = [];
 if (!empty($pdo)) {
+    try {
+        $mtStmt = $pdo->prepare("
+            SELECT c.id, CONCAT(r.first_name, ' ', r.last_name) AS patientName, TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) as age, r.gender, c.chief_complaint as chiefComplaint, c.diagnosis, r.barangay, c.consultation_date as date, c.consultation_notes
+            FROM consultations c
+            JOIN residents r ON c.resident_id = r.id
+            LEFT JOIN staff doc_s ON c.physician_id = doc_s.id
+            WHERE (c.physician_id = :sid OR doc_s.user_id = :uid OR c.chief_complaint LIKE '%Laboratory%' OR c.chief_complaint LIKE '%Blood%' OR c.chief_complaint LIKE '%MedTech%')
+            ORDER BY c.id DESC
+        ");
+        $mtStmt->execute(['sid' => $medtechStaffId, 'uid' => $medtechUserId]);
+        $medtechConsultations = $mtStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Exception $e) {}
+
     $consultationOptions = $pdo->query("SELECT c.id,CONCAT(r.first_name,' ',r.last_name) patient FROM consultations c JOIN residents r ON r.id=c.resident_id ORDER BY c.id DESC")->fetchAll(PDO::FETCH_ASSOC);
     $residentOptions = $pdo->query("SELECT id,CONCAT(first_name,' ',last_name) name FROM residents ORDER BY first_name,last_name")->fetchAll(PDO::FETCH_ASSOC);
     $staffOptions = $pdo->query("SELECT s.id,CONCAT(u.first_name,' ',u.last_name) name FROM staff s JOIN users u ON u.id=s.user_id ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
@@ -97,7 +91,7 @@ function flagClass($flag): string { return match($flag) {'normal'=>'bg-green-100
                 </div>
             </div>
             <div class="flex items-center gap-2">
-                <span class="hidden rounded-lg bg-white/10 px-3 py-1.5 text-sm font-semibold sm:block">♥ RHU Med Tech</span>
+                <span class="hidden rounded-lg bg-white/10 px-3 py-1.5 text-sm font-semibold sm:block">♥ <?= esc($_SESSION['rhu_staff_login']['name'] ?? 'Medical Technologist') ?></span>
                 <a href="StaffLogout.php" data-staff-logout class="staff-logout-trigger" title="Log Out"><span class="staff-logout-glyph" aria-hidden="true"></span><span>Log out</span></a>
             </div>
         </div>
@@ -133,6 +127,31 @@ function flagClass($flag): string { return match($flag) {'normal'=>'bg-green-100
                         <p class="text-xs text-gray-400"><?= $sub ?></p>
                     </div>
                 <?php endforeach; ?>
+            </section>
+
+            <section class="rounded-xl border border-violet-200 bg-white p-5 shadow-sm space-y-3">
+                <div class="flex justify-between items-center border-b border-violet-100 pb-2">
+                    <h2 class="font-bold text-sm text-violet-950 flex items-center gap-2">
+                        ⚗ Received Resident Lab Appointments (<?= count($medtechConsultations) ?>)
+                    </h2>
+                    <span class="text-[10px] font-bold bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full border border-violet-200">Live Queue</span>
+                </div>
+                <?php if (empty($medtechConsultations)): ?>
+                    <p class="text-xs text-gray-400 italic py-2 text-center">No laboratory consultations assigned to you yet.</p>
+                <?php else: ?>
+                    <div class="divide-y divide-gray-100 max-h-64 overflow-y-auto">
+                        <?php foreach ($medtechConsultations as $mc): ?>
+                            <div class="py-2.5 flex items-center justify-between text-xs gap-2">
+                                <div>
+                                    <p class="font-bold text-gray-900"><?= esc($mc['patientName']) ?> <span class="text-gray-500 font-normal">(<?= esc($mc['age'] ?? 'N/A') ?>y • <?= esc($mc['gender'] ?? 'N/A') ?> • <?= esc($mc['barangay']) ?>)</span></p>
+                                    <p class="text-violet-700 font-medium"><?= esc($mc['chiefComplaint']) ?></p>
+                                    <p class="text-[10px] text-gray-400 font-mono">📅 Date: <?= esc($mc['date']) ?></p>
+                                </div>
+                                <span class="px-2 py-1 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg font-bold text-[10px] shrink-0">Pending RDT/Lab</span>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
             </section>
 
             <section class="rounded-xl border border-violet-100 bg-violet-50 p-4">
