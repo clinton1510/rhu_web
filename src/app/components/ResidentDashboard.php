@@ -15,6 +15,145 @@ if (empty($_SESSION['user'])) {
     exit;
 }
 
+// ----------------------------------------------------
+// REALTIME NOTIFICATIONS API ENDPOINTS
+// ----------------------------------------------------
+if (isset($_GET['api']) || isset($_POST['api'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    $api = $_GET['api'] ?? $_POST['api'] ?? '';
+    $user = $_SESSION['user'] ?? [];
+    $userId = (int)($user['id'] ?? $user['user_id'] ?? 0);
+    $residentId = (int)($user['resident_id'] ?? 0);
+
+    if (empty($userId) && !empty($residentId) && !empty($pdo)) {
+        try {
+            $uStmt = $pdo->prepare("SELECT u.id FROM residents r JOIN users u ON u.email = r.email WHERE r.id = :rid LIMIT 1");
+            $uStmt->execute(['rid' => $residentId]);
+            if ($uid = $uStmt->fetchColumn()) {
+                $userId = (int)$uid;
+            }
+        } catch (Throwable $t) {}
+    }
+
+    if (empty($pdo)) {
+        echo json_encode(['success' => false, 'error' => 'Database connection unavailable']);
+        exit;
+    }
+
+    // Auto-provision portal_notifications table if needed
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS portal_notifications (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            user_id BIGINT UNSIGNED NULL,
+            audience_role VARCHAR(50) NULL,
+            message TEXT NOT NULL,
+            link_url VARCHAR(255) NULL,
+            is_read TINYINT(1) NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_user_role (user_id, audience_role)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    } catch (Throwable $t) {}
+
+    if ($api === 'get_notifications') {
+        try {
+            $stmt = $pdo->prepare("
+                SELECT id, message, link_url, is_read, created_at
+                FROM portal_notifications
+                WHERE (user_id = :uid AND user_id > 0) OR (audience_role = 'RESIDENT' OR (user_id IS NULL AND audience_role IS NULL))
+                ORDER BY id DESC LIMIT 50
+            ");
+            $stmt->execute(['uid' => $userId]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            // Seed initial system notifications if zero existing
+            if (empty($rows)) {
+                $seedMsg = "Welcome to the RHU Resident Portal! Access your medical history, health records, and book OPD consultations online.";
+                $ins = $pdo->prepare("INSERT INTO portal_notifications (user_id, audience_role, message, link_url, is_read) VALUES (:uid, 'RESIDENT', :msg, 'ResidentDashboard.php?tab=profile', 0)");
+                $ins->execute(['uid' => $userId ?: null, 'msg' => $seedMsg]);
+                
+                $seedMsg2 = "Reminder: Please keep your Emergency Contact Person and PhilHealth Number updated under the Profile tab.";
+                $ins->execute(['uid' => $userId ?: null, 'msg' => $seedMsg2]);
+
+                $stmt->execute(['uid' => $userId]);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            }
+
+            $unreadCount = 0;
+            $formatted = [];
+            foreach ($rows as $r) {
+                $isRead = (int)$r['is_read'];
+                if (!$isRead) $unreadCount++;
+
+                $timestamp = strtotime($r['created_at']);
+                $diff = time() - $timestamp;
+                $timeAgo = match(true) {
+                    $diff < 60 => 'Just now',
+                    $diff < 3600 => floor($diff / 60) . ' mins ago',
+                    $diff < 86400 => floor($diff / 3600) . ' hours ago',
+                    default => date('M j, Y g:i A', $timestamp)
+                };
+
+                $formatted[] = [
+                    'id' => (int)$r['id'],
+                    'title' => 'RHU Resident Notification',
+                    'message' => $r['message'],
+                    'link_url' => $r['link_url'],
+                    'is_read' => $isRead,
+                    'created_at' => $r['created_at'],
+                    'time_ago' => $timeAgo
+                ];
+            }
+
+            echo json_encode(['success' => true, 'notifications' => $formatted, 'unread_count' => $unreadCount]);
+            exit;
+        } catch (Throwable $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            exit;
+        }
+    }
+
+    if ($api === 'mark_read') {
+        try {
+            $notifId = (int)($_POST['id'] ?? 0);
+            $markAll = (int)($_POST['all'] ?? 0);
+
+            if ($markAll) {
+                $stmt = $pdo->prepare("UPDATE portal_notifications SET is_read = 1 WHERE (user_id = :uid AND user_id > 0) OR audience_role = 'RESIDENT' OR (user_id IS NULL AND audience_role IS NULL)");
+                $stmt->execute(['uid' => $userId]);
+            } elseif ($notifId > 0) {
+                $stmt = $pdo->prepare("UPDATE portal_notifications SET is_read = 1 WHERE id = :id");
+                $stmt->execute(['id' => $notifId]);
+            }
+            echo json_encode(['success' => true]);
+            exit;
+        } catch (Throwable $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            exit;
+        }
+    }
+
+    if ($api === 'delete_notifications') {
+        try {
+            $idsRaw = $_POST['ids'] ?? '';
+            $ids = json_decode($idsRaw, true);
+            if (!is_array($ids)) {
+                $ids = array_filter(array_map('intval', explode(',', (string)$idsRaw)));
+            }
+
+            if (!empty($ids)) {
+                $inQuery = implode(',', array_fill(0, count($ids), '?'));
+                $stmt = $pdo->prepare("DELETE FROM portal_notifications WHERE id IN ($inQuery)");
+                $stmt->execute(array_values($ids));
+            }
+            echo json_encode(['success' => true, 'deleted_count' => count($ids)]);
+            exit;
+        } catch (Throwable $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            exit;
+        }
+    }
+}
+
 // Audit records are restricted to authenticated RHU staff and administrators.
 // Never allow a resident-controlled tab value to enter an audit-log view.
 if (strtolower((string)($_GET['tab'] ?? '')) === 'audit') {
@@ -33,6 +172,10 @@ $user = $_SESSION['user'];
 $resident = null;
 $consultations = [];
 $vaccinationRecords = [];
+$familyPlanningRecords = [];
+$maternalReferrals = [];
+$pregnancyRecords = [];
+$birthRecords = [];
 $certificates = [];
 $loadError = null;
 $contactSuccess = $_SESSION['resident_dashboard_message_flash'] ?? '';
@@ -220,7 +363,7 @@ if (!empty($pdo)) {
                             $uStmt->execute(['sid' => $physicianId]);
                             if ($uUid = $uStmt->fetchColumn()) {
                                 $resName = trim(($resident['first_name'] ?? 'Resident') . ' ' . ($resident['last_name'] ?? ''));
-                                portalNotify($pdo, "New consultation appointment booked by {$resName} for {$preferredDate}.", (int)$uUid, null, 'RHUDashboard.php');
+                                portalNotify($pdo, "New consultation appointment booked by {$resName} for {$preferredDate}.", (int)$uUid, null, 'RHUAdminDashboard.php');
                             }
                         } catch (Throwable $tNotif) {}
                     }
@@ -259,6 +402,12 @@ if (!empty($pdo)) {
 
                     $bloodType = trim($_POST['blood_type'] ?? '');
                     $philhealthNo = trim($_POST['philhealth_number'] ?? '');
+                    $allergies = trim($_POST['allergies'] ?? '');
+                    $chronicConditions = trim($_POST['chronic_conditions'] ?? '');
+                    $currentMedications = trim($_POST['current_medications'] ?? '');
+                    $emergencyContactName = trim($_POST['emergency_contact_name'] ?? '');
+                    $emergencyContactRelationship = trim($_POST['emergency_contact_relationship'] ?? '');
+                    $emergencyContactPhone = trim($_POST['emergency_contact_phone'] ?? '');
 
                     try {
                         $pdo->exec("CREATE TABLE IF NOT EXISTS resident_health_profiles (
@@ -274,21 +423,52 @@ if (!empty($pdo)) {
                             alcohol_consumption VARCHAR(50) NULL,
                             exercise_frequency VARCHAR(50) NULL,
                             diet_type VARCHAR(50) NULL,
+                            blood_type VARCHAR(10) NULL,
+                            philhealth_number VARCHAR(50) NULL,
+                            allergies TEXT NULL,
+                            chronic_conditions TEXT NULL,
+                            current_medications TEXT NULL,
+                            emergency_contact_name VARCHAR(150) NULL,
+                            emergency_contact_relationship VARCHAR(100) NULL,
+                            emergency_contact_phone VARCHAR(50) NULL,
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                             INDEX idx_rhp_resident (resident_id)
                         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-                        try {
-                            $pdo->exec("ALTER TABLE resident_health_profiles ADD COLUMN blood_pressure VARCHAR(20) NULL AFTER weight");
-                            $pdo->exec("ALTER TABLE resident_health_profiles ADD COLUMN heart_rate INT NULL AFTER blood_pressure");
-                            $pdo->exec("ALTER TABLE resident_health_profiles ADD COLUMN temperature DOUBLE(4,1) NULL AFTER heart_rate");
-                            $pdo->exec("ALTER TABLE resident_health_profiles ADD COLUMN last_checkup_date DATE NULL AFTER temperature");
-                            $pdo->exec("ALTER TABLE resident_health_profiles ADD COLUMN smoking_status VARCHAR(50) NULL AFTER last_checkup_date");
-                            $pdo->exec("ALTER TABLE resident_health_profiles ADD COLUMN alcohol_consumption VARCHAR(50) NULL AFTER smoking_status");
-                            $pdo->exec("ALTER TABLE resident_health_profiles ADD COLUMN exercise_frequency VARCHAR(50) NULL AFTER alcohol_consumption");
-                            $pdo->exec("ALTER TABLE resident_health_profiles ADD COLUMN diet_type VARCHAR(50) NULL AFTER exercise_frequency");
-                        } catch (Throwable $tCols) {}
+                        foreach ([
+                            "ALTER TABLE resident_health_profiles ADD COLUMN blood_pressure VARCHAR(20) NULL AFTER weight",
+                            "ALTER TABLE resident_health_profiles ADD COLUMN heart_rate INT NULL AFTER blood_pressure",
+                            "ALTER TABLE resident_health_profiles ADD COLUMN temperature DOUBLE(4,1) NULL AFTER heart_rate",
+                            "ALTER TABLE resident_health_profiles ADD COLUMN last_checkup_date DATE NULL AFTER temperature",
+                            "ALTER TABLE resident_health_profiles ADD COLUMN smoking_status VARCHAR(50) NULL AFTER last_checkup_date",
+                            "ALTER TABLE resident_health_profiles ADD COLUMN alcohol_consumption VARCHAR(50) NULL AFTER smoking_status",
+                            "ALTER TABLE resident_health_profiles ADD COLUMN exercise_frequency VARCHAR(50) NULL AFTER alcohol_consumption",
+                            "ALTER TABLE resident_health_profiles ADD COLUMN diet_type VARCHAR(50) NULL AFTER exercise_frequency",
+                            "ALTER TABLE resident_health_profiles ADD COLUMN blood_type VARCHAR(10) NULL AFTER diet_type",
+                            "ALTER TABLE resident_health_profiles ADD COLUMN philhealth_number VARCHAR(50) NULL AFTER blood_type",
+                            "ALTER TABLE resident_health_profiles ADD COLUMN allergies TEXT NULL AFTER philhealth_number",
+                            "ALTER TABLE resident_health_profiles ADD COLUMN chronic_conditions TEXT NULL AFTER allergies",
+                            "ALTER TABLE resident_health_profiles ADD COLUMN current_medications TEXT NULL AFTER chronic_conditions",
+                            "ALTER TABLE resident_health_profiles ADD COLUMN emergency_contact_name VARCHAR(150) NULL AFTER current_medications",
+                            "ALTER TABLE resident_health_profiles ADD COLUMN emergency_contact_relationship VARCHAR(100) NULL AFTER emergency_contact_name",
+                            "ALTER TABLE resident_health_profiles ADD COLUMN emergency_contact_phone VARCHAR(50) NULL AFTER emergency_contact_relationship"
+                        ] as $alterHpSql) {
+                            try { $pdo->exec($alterHpSql); } catch (Throwable $tSingleHpCol) {}
+                        }
                     } catch (Throwable $tHp) {}
+
+                    foreach ([
+                        "ALTER TABLE residents ADD COLUMN allergies TEXT NULL",
+                        "ALTER TABLE residents ADD COLUMN medical_conditions TEXT NULL",
+                        "ALTER TABLE residents ADD COLUMN emergency_contact_name VARCHAR(150) NULL",
+                        "ALTER TABLE residents ADD COLUMN emergency_contact_number VARCHAR(50) NULL",
+                        "ALTER TABLE residents ADD COLUMN emergency_contact_phone VARCHAR(50) NULL",
+                        "ALTER TABLE residents ADD COLUMN emergency_contact_relationship VARCHAR(100) NULL",
+                        "ALTER TABLE residents ADD COLUMN philhealth_id VARCHAR(50) NULL",
+                        "ALTER TABLE residents ADD COLUMN blood_type VARCHAR(10) NULL"
+                    ] as $alterSql) {
+                        try { $pdo->exec($alterSql); } catch (Throwable $tSingleCol) {}
+                    }
 
                     $chkStmt = $pdo->prepare("SELECT id FROM resident_health_profiles WHERE resident_id = :rid LIMIT 1");
                     $chkStmt->execute(['rid' => $residentId]);
@@ -299,34 +479,65 @@ if (!empty($pdo)) {
                             height = :h, weight = :w, blood_pressure = :bp, heart_rate = :hr,
                             temperature = :temp, last_checkup_date = :lcd, smoking_status = :smoke,
                             alcohol_consumption = :alc, exercise_frequency = :ex, diet_type = :dt,
-                            updated_at = NOW()
+                            blood_type = :bt, philhealth_number = :ph, allergies = :alg,
+                            chronic_conditions = :cc, current_medications = :cm,
+                            emergency_contact_name = :ecn, emergency_contact_relationship = :ecr,
+                            emergency_contact_phone = :ecp, updated_at = NOW()
                             WHERE resident_id = :rid");
                         $upStmt->execute([
                             'h' => $height, 'w' => $weight, 'bp' => $bloodPressure, 'hr' => $heartRate,
                             'temp' => $temperature, 'lcd' => $lastCheckupDate, 'smoke' => $smokingStatus,
                             'alc' => $alcoholConsumption, 'ex' => $exerciseFrequency, 'dt' => $dietType,
-                            'rid' => $residentId
+                            'bt' => $bloodType, 'ph' => $philhealthNo, 'alg' => $allergies,
+                            'cc' => $chronicConditions, 'cm' => $currentMedications,
+                            'ecn' => $emergencyContactName, 'ecr' => $emergencyContactRelationship,
+                            'ecp' => $emergencyContactPhone, 'rid' => $residentId
                         ]);
                     } else {
                         $insStmt = $pdo->prepare("INSERT INTO resident_health_profiles (
                             resident_id, height, weight, blood_pressure, heart_rate, temperature,
-                            last_checkup_date, smoking_status, alcohol_consumption, exercise_frequency, diet_type, updated_at
+                            last_checkup_date, smoking_status, alcohol_consumption, exercise_frequency, diet_type,
+                            blood_type, philhealth_number, allergies, chronic_conditions, current_medications,
+                            emergency_contact_name, emergency_contact_relationship, emergency_contact_phone, updated_at
                         ) VALUES (
-                            :rid, :h, :w, :bp, :hr, :temp, :lcd, :smoke, :alc, :ex, :dt, NOW()
+                            :rid, :h, :w, :bp, :hr, :temp, :lcd, :smoke, :alc, :ex, :dt,
+                            :bt, :ph, :alg, :cc, :cm, :ecn, :ecr, :ecp, NOW()
                         )");
                         $insStmt->execute([
                             'rid' => $residentId, 'h' => $height, 'w' => $weight, 'bp' => $bloodPressure,
                             'hr' => $heartRate, 'temp' => $temperature, 'lcd' => $lastCheckupDate,
                             'smoke' => $smokingStatus, 'alc' => $alcoholConsumption, 'ex' => $exerciseFrequency,
-                            'dt' => $dietType
+                            'dt' => $dietType, 'bt' => $bloodType, 'ph' => $philhealthNo, 'alg' => $allergies,
+                            'cc' => $chronicConditions, 'cm' => $currentMedications,
+                            'ecn' => $emergencyContactName, 'ecr' => $emergencyContactRelationship,
+                            'ecp' => $emergencyContactPhone
                         ]);
                     }
 
-                    if (!empty($bloodType) || !empty($philhealthNo)) {
+                    try {
+                        $upRes = $pdo->prepare("UPDATE residents SET 
+                            blood_type = :bt, philhealth_id = :ph, allergies = :alg, medical_conditions = :mc,
+                            emergency_contact_name = :ecn, emergency_contact_relationship = :ecr,
+                            emergency_contact_phone = :ecp, emergency_contact_number = :ecp2
+                            WHERE id = :rid");
+                        $upRes->execute([
+                            'bt' => $bloodType, 'ph' => $philhealthNo, 'alg' => $allergies, 'mc' => $chronicConditions,
+                            'ecn' => $emergencyContactName, 'ecr' => $emergencyContactRelationship,
+                            'ecp' => $emergencyContactPhone, 'ecp2' => $emergencyContactPhone,
+                            'rid' => $residentId
+                        ]);
+                    } catch (Throwable $tRes) {
                         try {
-                            $upRes = $pdo->prepare("UPDATE residents SET blood_type = :bt, philhealth_id = :ph WHERE id = :rid");
-                            $upRes->execute(['bt' => $bloodType, 'ph' => $philhealthNo, 'rid' => $residentId]);
-                        } catch (Throwable $tRes) {}
+                            $upResFallback = $pdo->prepare("UPDATE residents SET 
+                                blood_type = :bt, philhealth_id = :ph, allergies = :alg, medical_conditions = :mc,
+                                emergency_contact_name = :ecn, emergency_contact_number = :ecp
+                                WHERE id = :rid");
+                            $upResFallback->execute([
+                                'bt' => $bloodType, 'ph' => $philhealthNo, 'alg' => $allergies, 'mc' => $chronicConditions,
+                                'ecn' => $emergencyContactName, 'ecp' => $emergencyContactPhone,
+                                'rid' => $residentId
+                            ]);
+                        } catch (Throwable $tResFB) {}
                     }
 
                     $_SESSION['resident_dashboard_message_flash'] = 'Your Health Profile has been updated successfully!';
@@ -358,6 +569,30 @@ if (!empty($pdo)) {
             );
             $statement->execute(['resident_id' => $residentId]);
             $vaccinationRecords = $statement->fetchAll(PDO::FETCH_ASSOC);
+
+            try {
+                $statement = $pdo->prepare('SELECT * FROM family_planning_records WHERE resident_id = :resident_id ORDER BY id DESC');
+                $statement->execute(['resident_id' => $residentId]);
+                $familyPlanningRecords = $statement->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            } catch (Throwable $ignored) {}
+
+            try {
+                $statement = $pdo->prepare('SELECT * FROM maternal_referrals WHERE resident_id = :resident_id ORDER BY id DESC');
+                $statement->execute(['resident_id' => $residentId]);
+                $maternalReferrals = $statement->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            } catch (Throwable $ignored) {}
+
+            try {
+                $statement = $pdo->prepare('SELECT * FROM pregnancies WHERE resident_id = :resident_id ORDER BY id DESC');
+                $statement->execute(['resident_id' => $residentId]);
+                $pregnancyRecords = $statement->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            } catch (Throwable $ignored) {}
+
+            try {
+                $statement = $pdo->prepare('SELECT * FROM vital_statistics_births WHERE mother_id = :resident_id ORDER BY id DESC');
+                $statement->execute(['resident_id' => $residentId]);
+                $birthRecords = $statement->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            } catch (Throwable $ignored) {}
 
             $statement = $pdo->prepare(
                 'SELECT hc.*, COALESCE(ct.certificate_type_name, "Health Certificate") as certificate_type_name
@@ -454,6 +689,62 @@ if (!$resident && $_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['form'] ?? ''
 
 if (!$resident && !empty($_SESSION['resident_registration'])) $resident = $_SESSION['resident_registration'];
 
+if (!empty($_GET['certificate_document']) && !empty($pdo) && !empty($resident['id'])) {
+    $certificateId = (int)$_GET['certificate_document'];
+    $certificateStmt = $pdo->prepare(
+        "SELECT hc.*, ct.certificate_type_name,
+                CONCAT_WS(' ', r.first_name, r.middle_name, r.last_name) AS resident_name,
+                r.address, r.barangay,
+                CONCAT_WS(' ', u.first_name, u.last_name) AS issuer_name,
+                COALESCE(s.staff_type, 'Authorized RHU Officer') AS issuer_position
+         FROM health_certificates hc
+         JOIN certificate_types ct ON ct.id = hc.certificate_type_id
+         JOIN residents r ON r.id = hc.resident_id
+         LEFT JOIN staff s ON s.id = hc.issued_by_id
+         LEFT JOIN users u ON u.id = s.user_id
+         WHERE hc.id = :certificate_id AND hc.resident_id = :resident_id
+         LIMIT 1"
+    );
+    $certificateStmt->execute(['certificate_id' => $certificateId, 'resident_id' => (int)$resident['id']]);
+    $certificateDocument = $certificateStmt->fetch(PDO::FETCH_ASSOC);
+    $documentStatus = strtolower((string)($certificateDocument['validity_status'] ?? ''));
+    $canGenerateCertificate = $certificateDocument
+        && (str_contains($documentStatus, 'valid') || str_contains($documentStatus, 'approved') || str_contains($documentStatus, 'issued'))
+        && !str_contains($documentStatus, 'invalid')
+        && !str_contains($documentStatus, 'revoked');
+    if (!$canGenerateCertificate) {
+        http_response_code(403);
+        exit('This certificate is not available for generation.');
+    }
+    $certificateNumber = $certificateDocument['certificate_number'] ?: ('HC-' . str_pad((string)$certificateDocument['id'], 8, '0', STR_PAD_LEFT));
+    $certificateHtml = trim((string)($certificateDocument['generated_html'] ?? ''));
+    if ($certificateHtml === '') {
+        $certificateHtml = portalGenerateCertificateHtml($pdo, (int)$certificateDocument['id']);
+        $updateHtml = $pdo->prepare('UPDATE health_certificates SET generated_html = :html WHERE id = :id');
+        $updateHtml->execute(['html' => $certificateHtml, 'id' => (int)$certificateDocument['id']]);
+    }
+    ?>
+    <!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+      <title><?= esc($certificateDocument['certificate_type_name']) ?> — <?= esc($certificateNumber) ?></title>
+      <style>
+        *{box-sizing:border-box}body{margin:0;background:#e5e7eb;color:#111;font-family:Arial,sans-serif}
+        .toolbar{position:sticky;top:0;z-index:5;display:flex;justify-content:center;gap:10px;padding:14px;background:#0f766e}
+        .toolbar button,.toolbar a{border:1px solid rgba(255,255,255,.5);border-radius:8px;background:#fff;padding:9px 16px;color:#0f766e;font:700 13px Arial;text-decoration:none;cursor:pointer}
+        .official-certificate-template{position:relative;overflow:hidden;margin:24px auto;width:min(100%,760px);min-height:1040px;background:#fff;padding:58px 68px 44px;color:#050505;font-family:Arial,Helvetica,sans-serif;line-height:1.45;box-shadow:0 18px 50px rgba(15,23,42,.18)}.official-certificate-template .cert-header{position:relative;z-index:1;display:grid;grid-template-columns:112px 1fr 112px;align-items:center;text-align:center;margin-bottom:10px}.official-certificate-template .cert-seal{width:96px;height:96px;object-fit:contain;justify-self:center}.official-certificate-template .cert-watermark{position:absolute;z-index:0;left:50%;top:285px;width:560px;height:560px;transform:translateX(-50%);object-fit:contain;opacity:.1;pointer-events:none}.official-certificate-template .cert-header-copy{font-size:11px;line-height:1.2}.official-certificate-template .cert-header-copy p{margin:0}.official-certificate-template .cert-republic{font-family:Georgia,"Times New Roman",serif;font-style:italic;font-size:13px}.official-certificate-template .cert-rule{position:relative;z-index:1;border-top:2px solid #111;border-bottom:1px solid #111;height:4px;margin:6px 0 42px}.official-certificate-template h1,.official-certificate-template h2,.official-certificate-template h3{position:relative;z-index:1;margin:5px 0;text-align:center;font-weight:900;text-transform:uppercase}.official-certificate-template h1{font-size:18px;letter-spacing:0}.official-certificate-template h2{font-size:21px;font-style:italic}.official-certificate-template h3{font-size:28px;letter-spacing:0;margin-bottom:2px}.official-certificate-template .cert-no{position:relative;z-index:1;text-align:center;font-family:"Courier New",monospace;font-size:10px;font-weight:700;color:#334155;margin:0 0 44px}.official-certificate-template .cert-body{position:relative;z-index:1;margin:0;font-size:12px;line-height:1.65;text-align:justify}.official-certificate-template .cert-body p{margin:0 0 18px;text-indent:34px}.official-certificate-template .cert-body .cert-greeting{text-indent:0;margin-bottom:26px;text-align:left}.official-certificate-template .cert-dates{display:flex;gap:34px;margin-top:6px;font-size:10px;text-align:left}.official-certificate-template .cert-signatures{position:relative;z-index:1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:52px;margin-top:118px;text-align:center}.official-certificate-template .cert-signatures>div{min-height:104px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;font-size:12px}.official-certificate-template .cert-signatures strong{border-top:1px solid #111;min-width:250px;padding-top:5px;font-weight:900;text-transform:uppercase}.official-certificate-template .certificate-signature-image{display:block;width:170px;height:58px;margin:0 auto -5px;object-fit:contain;object-position:center bottom;mix-blend-mode:multiply}.official-certificate-template .signature-line{height:58px;margin-bottom:-5px;width:170px}.official-certificate-template small,.official-certificate-template .cert-footer{display:block;color:#111;font-size:10px}.official-certificate-template .cert-footer{position:absolute;z-index:1;left:68px;right:68px;bottom:40px;display:flex;justify-content:space-between;border-top:1px solid #64748b;padding-top:6px;font-family:"Courier New",monospace;color:#0f172a}
+        @media(max-width:820px){.official-certificate-template{width:680px;padding:48px 50px 38px}}@media print{@page{size:A4 portrait;margin:0}body{background:#fff}.toolbar{display:none}.official-certificate-template{width:210mm;min-height:297mm;margin:0;box-shadow:none}}
+      </style>
+    </head>
+    <body>
+      <div class="toolbar"><button onclick="window.print()">Download / Save as PDF</button><a href="ResidentDashboard.php?tab=certificates">Back to certificates</a></div>
+      <?= $certificateHtml ?>
+    </body></html>
+    <?php
+    exit;
+}
+
 $lastConsultation = $consultations[0] ?? null;
 $currentYear = (int)date('Y');
 $visitsThisYear = count(array_filter($consultations, fn($consultation) => !empty($consultation['consultation_date']) && (int)date('Y', strtotime($consultation['consultation_date'])) === $currentYear));
@@ -469,6 +760,7 @@ $tabs = [
     'certificates' => ['Certificates', 'award'],
     'family' => ['Family Members', 'users'], 
     'events' => ['Events & Programs', 'calendar'],
+    'map' => ['Nearby Map', 'map-pinned'],
     'contact' => ['Contact RHU', 'phone-call'],
     'emergency' => ['Emergency & Referral', 'siren'],
 ];
@@ -491,6 +783,8 @@ $events = [
   <title>Resident Dashboard - RedPulse RHU</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
     :root {
@@ -500,12 +794,12 @@ $events = [
       --rhu-ink: #0f172a;
     }
     html { scroll-behavior: smooth; }
-    body {
+    body.resident-dashboard {
       font-family: 'Plus Jakarta Sans', sans-serif;
       background:
-        radial-gradient(circle at 4% 3%, rgba(20,184,166,.13), transparent 25rem),
-        radial-gradient(circle at 96% 12%, rgba(14,165,233,.10), transparent 28rem),
-        linear-gradient(155deg, #f8fffe 0%, #f8fafc 48%, #f5f9ff 100%);
+        linear-gradient(135deg, rgba(240, 253, 250, .89), rgba(248, 250, 252, .82) 50%, rgba(240, 249, 255, .88)),
+        url("../../../assets/admin-municipal-background.png") center / cover fixed no-repeat,
+        #f5f9ff;
       color: var(--rhu-ink);
     }
     body::before {
@@ -516,6 +810,24 @@ $events = [
       height: 3px;
       background: linear-gradient(90deg, #10b981, #14b8a6, #0ea5e9, #6366f1);
       pointer-events: none;
+    }
+    .resident-main-shell {
+      background: rgba(248, 250, 252, .68) !important;
+    }
+    .resident-dashboard main .bg-white {
+      background-color: rgba(255, 255, 255, .93) !important;
+      box-shadow: 0 12px 30px rgba(15, 23, 42, .07);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+    @media (max-width: 767px) {
+      body.resident-dashboard {
+        background-position: 58% center;
+        background-attachment: scroll;
+      }
+      .resident-main-shell {
+        background: rgba(248, 250, 252, .78) !important;
+      }
     }
     #scroll-progress {
       position: fixed;
@@ -569,6 +881,12 @@ $events = [
     }
     .nav-active i {
       color: #1a73e8 !important;
+    }
+    #resident-location-map { min-height: 31rem; background: #e2e8f0; }
+    #resident-location-map .leaflet-control-attribution { font-size: 9px; }
+    .map-user-marker {
+      width: 22px; height: 22px; border: 4px solid #fff; border-radius: 9999px;
+      background: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.25), 0 2px 8px rgba(15,23,42,.3);
     }
     [data-tab-panel] {
       animation: panel-enter 300ms cubic-bezier(.2,.8,.2,1);
@@ -636,14 +954,34 @@ $events = [
       background-image: linear-gradient(145deg, rgba(255,255,255,.98), rgba(248,250,252,.94));
     }
     [data-notification-panel] {
+      z-index: 9999 !important;
+      background-color: #ffffff !important;
       animation: popover-enter 190ms cubic-bezier(.2,.8,.2,1);
-      border-color: rgba(153,246,228,.8) !important;
-      box-shadow: 0 20px 45px rgba(15,23,42,.16) !important;
+      border-color: rgba(203, 213, 225, 0.8) !important;
+      box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.25), 0 0 0 1px rgba(15, 23, 42, 0.08) !important;
     }
     #dependent-modal > div,
     #appointment-modal > div,
     #logout-modal > div {
       animation: modal-enter 240ms cubic-bezier(.2,.8,.2,1);
+    }
+    #appointment-modal {
+      position: fixed !important;
+      inset: 0 !important;
+      display: grid !important;
+      width: 100vw;
+      min-height: 100vh;
+      min-height: 100dvh;
+      place-items: center;
+      overflow: auto;
+    }
+    #appointment-modal.hidden {
+      display: none !important;
+    }
+    #appointment-modal > [data-appointment-dialog] {
+      align-self: center;
+      justify-self: center;
+      margin: auto;
     }
     * {
       scrollbar-width: thin;
@@ -699,7 +1037,7 @@ $events = [
   <link rel="stylesheet" href="dashboard-enhancements.css">
   <script defer src="dashboard-enhancements.js"></script>
 </head>
-<body class="min-h-screen bg-white text-slate-800 antialiased flex flex-col md:flex-row">
+<body class="resident-dashboard min-h-screen bg-white text-slate-800 antialiased flex flex-col md:flex-row">
   <div id="scroll-progress" aria-hidden="true"></div>
   <div class="ambient-orb ambient-orb-one" aria-hidden="true"></div>
   <div class="ambient-orb ambient-orb-two" aria-hidden="true"></div>
@@ -746,10 +1084,10 @@ $events = [
   </aside>
 
   <!-- Main Area -->
-  <div class="flex-1 min-w-0 flex flex-col min-h-screen bg-slate-50/50">
+  <div class="resident-main-shell flex-1 min-w-0 flex flex-col min-h-screen bg-slate-50/50">
 
     <!-- Top Navigation Bar -->
-    <header class="sticky top-0 z-30 h-16 bg-white border-b border-slate-200 px-4 sm:px-8 flex items-center justify-between">
+    <header class="sticky top-0 z-[100] h-16 bg-white border-b border-slate-200 px-4 sm:px-8 flex items-center justify-between">
       <div class="flex items-center gap-3">
         <button id="mobile-menu-btn" type="button" class="md:hidden flex h-10 w-10 items-center justify-center rounded-full text-slate-600 hover:bg-slate-100">
           <i data-lucide="menu" class="h-5 w-5"></i>
@@ -760,27 +1098,10 @@ $events = [
       <!-- Notifications & Profile Header -->
       <div class="flex items-center gap-3">
         <div class="relative">
-          <button type="button" data-notifications class="flex h-10 w-10 items-center justify-center rounded-full text-slate-600 hover:bg-slate-100 transition-colors">
+          <button type="button" id="notification-bell-btn" onclick="toggleNotificationPanel(event)" data-notifications class="relative flex h-10 w-10 items-center justify-center rounded-full text-slate-600 hover:bg-slate-100 transition-colors">
             <i data-lucide="bell" class="h-5 w-5"></i>
-            <span class="absolute right-2 top-2 h-2 w-2 rounded-full bg-rose-500"></span>
+            <span id="notif-badge-count" class="absolute -right-0.5 -top-0.5 hidden flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-rose-500 px-1 text-[9px] font-extrabold text-white shadow-sm">0</span>
           </button>
-          
-          <div data-notification-panel class="hidden absolute right-0 top-12 z-50 w-80 overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-800 shadow-xl transition-all">
-            <div class="flex items-center justify-between border-b border-slate-100 px-4 py-3 bg-slate-50">
-              <p class="text-xs font-bold text-slate-900">Notifications</p>
-              <button type="button" data-close-notifications class="text-xs font-semibold text-slate-400 hover:text-slate-600">Close</button>
-            </div>
-            <div class="divide-y divide-slate-100 text-xs">
-              <div class="p-4 hover:bg-slate-50">
-                <p class="font-medium text-slate-700">Hypertension follow-up due on <strong>July 10, 2026</strong>.</p>
-                <p class="mt-1 text-[10px] text-slate-400">2 days ago</p>
-              </div>
-              <div class="p-4 hover:bg-slate-50">
-                <p class="font-medium text-slate-700">Annual influenza vaccine due October 2026.</p>
-                <p class="mt-1 text-[10px] text-slate-400">1 week ago</p>
-              </div>
-            </div>
-          </div>
         </div>
 
         <div class="flex items-center gap-2 pl-2 border-l border-slate-200">
@@ -876,7 +1197,7 @@ $events = [
               ['Certificates', 'certificates', 'bg-emerald-50 text-emerald-600', 'award'],
               ['Health Events', 'events', 'bg-rose-50 text-rose-600', 'calendar'],
               ['Contact RHU', 'contact', 'bg-teal-50 text-teal-600', 'phone-call'],
-              ['Health Tips', 'home', 'bg-purple-50 text-purple-600', 'heart-pulse']
+              ['Nearby Map', 'map', 'bg-purple-50 text-purple-600', 'map-pinned']
             ];
             foreach ($quickAccess as [$label, $target, $style, $icon]): ?>
               <button type="button" data-tab-link="<?= esc($target) ?>" class="flex flex-col items-center justify-center gap-2.5 rounded-2xl border border-slate-200 bg-white p-4 text-center shadow-2xs transition-all hover:border-slate-300">
@@ -941,7 +1262,7 @@ $events = [
                 </div>
               </div>
             </div>
-            <button type="button" onclick="document.getElementById('edit-health-profile-modal').classList.remove('hidden')" class="inline-flex items-center gap-2 rounded-xl bg-teal-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-teal-700 transition-all cursor-pointer">
+            <button type="button" onclick="document.getElementById('edit-health-profile-modal')?.classList.remove('hidden')" class="inline-flex items-center gap-2 rounded-xl bg-teal-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-teal-700 transition-all cursor-pointer">
               <i data-lucide="edit-3" class="h-4 w-4"></i> Edit Health Profile
             </button>
           </div>
@@ -1056,19 +1377,19 @@ $events = [
               <div>
                 <p class="text-slate-400 font-semibold uppercase text-[10px]">Known Allergies</p>
                 <p class="font-medium text-slate-800 mt-0.5 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                  <?= esc($healthProfile['allergies'] ?? 'No known allergies recorded.') ?>
+                  <?= esc(!empty($healthProfile['allergies']) ? $healthProfile['allergies'] : (!empty($resident['allergies']) ? $resident['allergies'] : 'No known allergies recorded.')) ?>
                 </p>
               </div>
               <div>
                 <p class="text-slate-400 font-semibold uppercase text-[10px]">Chronic Conditions / Illnesses</p>
                 <p class="font-medium text-slate-800 mt-0.5 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                  <?= esc($healthProfile['chronic_conditions'] ?? 'No pre-existing chronic conditions recorded.') ?>
+                  <?= esc(!empty($healthProfile['chronic_conditions']) ? $healthProfile['chronic_conditions'] : (!empty($healthProfile['medical_conditions']) ? $healthProfile['medical_conditions'] : (!empty($resident['medical_conditions']) ? $resident['medical_conditions'] : 'No pre-existing chronic conditions recorded.'))) ?>
                 </p>
               </div>
               <div>
                 <p class="text-slate-400 font-semibold uppercase text-[10px]">Current Prescribed Medications</p>
                 <p class="font-medium text-slate-800 mt-0.5 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                  <?= esc($healthProfile['current_medications'] ?? 'None currently listed.') ?>
+                  <?= esc(!empty($healthProfile['current_medications']) ? $healthProfile['current_medications'] : (!empty($healthProfile['medications']) ? $healthProfile['medications'] : 'None currently listed.')) ?>
                 </p>
               </div>
             </div>
@@ -1087,15 +1408,15 @@ $events = [
             <div class="grid grid-cols-2 gap-4 text-xs">
               <div>
                 <p class="text-slate-400 font-semibold uppercase text-[10px]">Emergency Contact Person</p>
-                <p class="font-bold text-slate-800 mt-0.5"><?= esc($healthProfile['emergency_contact_name'] ?? 'Not set') ?></p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= esc(!empty($healthProfile['emergency_contact_name']) ? $healthProfile['emergency_contact_name'] : (!empty($resident['emergency_contact_name']) ? $resident['emergency_contact_name'] : 'Not set')) ?></p>
               </div>
               <div>
                 <p class="text-slate-400 font-semibold uppercase text-[10px]">Relationship</p>
-                <p class="font-bold text-slate-800 mt-0.5"><?= esc($healthProfile['emergency_contact_relationship'] ?? 'Family Member') ?></p>
+                <p class="font-bold text-slate-800 mt-0.5"><?= esc(!empty($healthProfile['emergency_contact_relationship']) ? $healthProfile['emergency_contact_relationship'] : (!empty($resident['emergency_contact_relationship']) ? $resident['emergency_contact_relationship'] : 'Family Member')) ?></p>
               </div>
               <div>
                 <p class="text-slate-400 font-semibold uppercase text-[10px]">Emergency Phone Number</p>
-                <p class="font-bold text-slate-800 mt-0.5 text-teal-700"><?= esc($healthProfile['emergency_contact_phone'] ?? 'Not set') ?></p>
+                <p class="font-bold text-slate-800 mt-0.5 text-teal-700"><?= esc(!empty($healthProfile['emergency_contact_phone']) ? $healthProfile['emergency_contact_phone'] : (!empty($resident['emergency_contact_phone']) ? $resident['emergency_contact_phone'] : 'Not set')) ?></p>
               </div>
               <div>
                 <p class="text-slate-400 font-semibold uppercase text-[10px]">PhilHealth Number</p>
@@ -1111,7 +1432,7 @@ $events = [
       <section data-tab-panel="records" class="hidden space-y-6">
         <div class="flex items-center justify-between">
           <h3 class="text-lg font-bold text-slate-900">Health Records & Consultations</h3>
-          <button type="button" onclick="document.getElementById('appointment-modal').classList.remove('hidden')" class="rounded-xl bg-teal-600 px-4 py-2 text-xs font-bold text-white hover:bg-teal-700 transition-all flex items-center gap-2">
+          <button type="button" data-appointment-open class="rounded-xl bg-teal-600 px-4 py-2 text-xs font-bold text-white hover:bg-teal-700 transition-all flex items-center gap-2" aria-haspopup="dialog" aria-controls="appointment-modal">
             <i data-lucide="plus" class="h-4 w-4"></i> Request OPD Appointment
           </button>
         </div>
@@ -1138,28 +1459,68 @@ $events = [
               <p class="text-sm font-semibold">No consultations recorded yet</p>
             </div>
           <?php else: foreach ($consultations as $consultation): ?>
-            <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs transition-all hover:border-slate-300">
+            <?php 
+              $rawSt = strtolower($consultation['consultation_status'] ?? 'scheduled');
+              $stClass = match(true) {
+                str_contains($rawSt, 'completed') => 'bg-emerald-100 text-emerald-800 border-emerald-300',
+                str_contains($rawSt, 'progress') => 'bg-blue-100 text-blue-800 border-blue-300',
+                str_contains($rawSt, 'referred') => 'bg-purple-100 text-purple-800 border-purple-300',
+                str_contains($rawSt, 'cancel') => 'bg-rose-100 text-rose-800 border-rose-300',
+                default => 'bg-amber-100 text-amber-800 border-amber-300'
+              };
+              $stLabel = ucfirst($consultation['consultation_status'] ?? 'Scheduled');
+            ?>
+            <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs transition-all hover:border-slate-300 space-y-3">
               <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-100 pb-3">
                 <div>
-                  <span class="text-[11px] font-bold uppercase tracking-wider text-teal-600"><?= esc($consultation['consultation_time'] ?? 'OPD') ?></span>
-                  <h4 class="font-bold text-slate-900 text-base"><?= esc($consultation['diagnosis'] ?? 'Consultation') ?></h4>
-                  <p class="text-xs text-slate-500 font-medium">Attending: <?= esc($consultation['physician_name'] ?: 'Doctor') ?></p>
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] font-bold uppercase tracking-wider text-teal-600"><?= esc($consultation['consultation_time'] ?? 'OPD') ?></span>
+                    <span class="rounded-full px-2.5 py-0.5 text-[10px] font-extrabold border <?= $stClass ?>">Status: <?= esc($stLabel) ?></span>
+                  </div>
+                  <h4 class="font-bold text-slate-900 text-base mt-1"><?= esc($consultation['diagnosis'] ?? 'Consultation') ?></h4>
+                  <p class="text-xs text-slate-500 font-medium">Attending Provider: <?= esc($consultation['physician_name'] ?: 'RHU Healthcare Staff') ?></p>
                 </div>
-                <span class="rounded-lg bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600"><?= esc($consultation['consultation_date'] ?? '—') ?></span>
+                <span class="rounded-lg bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">📅 <?= esc($consultation['consultation_date'] ?? '—') ?></span>
               </div>
-              <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                 <div>
                   <p class="font-bold text-slate-400">Chief Complaint:</p>
                   <p class="text-slate-700 font-medium"><?= esc($consultation['chief_complaint'] ?? 'None specified') ?></p>
                 </div>
                 <div>
                   <p class="font-bold text-slate-400">Prescribed Medications:</p>
-                  <p class="text-slate-700 font-medium"><?= esc($consultation['medications_prescribed'] ?? 'None') ?></p>
+                  <p class="text-slate-700 font-medium"><?= esc($consultation['medications_prescribed'] ?: 'None recorded yet') ?></p>
                 </div>
               </div>
+              <?php if (!empty($consultation['consultation_notes']) || !empty($consultation['treatment_plan'])): ?>
+                <div class="bg-slate-50 p-3 rounded-xl border border-slate-200/60 text-xs space-y-1">
+                  <p class="font-bold text-teal-800 uppercase text-[10px]">💬 Healthcare Staff Response &amp; Clinical Notes:</p>
+                  <p class="text-slate-800 font-medium whitespace-pre-line"><?= esc(!empty($consultation['consultation_notes']) ? $consultation['consultation_notes'] : $consultation['treatment_plan']); ?></p>
+                </div>
+              <?php endif; ?>
             </article>
           <?php endforeach; endif; ?>
         </div>
+
+        <?php if ($pregnancyRecords || $familyPlanningRecords || $maternalReferrals || $birthRecords): ?>
+          <div class="rounded-2xl border border-pink-200 bg-white p-5 shadow-sm">
+            <h3 class="mb-4 flex items-center gap-2 font-black text-slate-900"><i data-lucide="heart-handshake" class="h-5 w-5 text-pink-600"></i> Maternal &amp; Midwife Service Records</h3>
+            <div class="grid gap-3 md:grid-cols-2">
+              <?php foreach ($pregnancyRecords as $record): ?>
+                <article class="rounded-xl border border-pink-100 bg-pink-50/50 p-4 text-xs"><p class="font-black text-pink-900">Prenatal Case — <?= esc($record['pregnancy_status']) ?></p><p class="mt-1 text-slate-600">G<?= (int)($record['gravida'] ?? 1) ?>P<?= (int)($record['para'] ?? 0) ?> · EDC: <?= esc($record['expected_delivery_date']) ?></p><p class="mt-1 text-slate-500"><?= esc($record['risk_factors']) ?></p></article>
+              <?php endforeach; ?>
+              <?php foreach ($familyPlanningRecords as $record): ?>
+                <article class="rounded-xl border border-rose-100 bg-rose-50/50 p-4 text-xs"><p class="font-black text-rose-900">Family Planning — <?= esc($record['contraceptive_method']) ?></p><p class="mt-1 text-slate-600"><?= esc($record['acceptor_type']) ?> · Next visit: <?= esc($record['next_visit_date'] ?: 'To be scheduled') ?></p></article>
+              <?php endforeach; ?>
+              <?php foreach ($maternalReferrals as $record): ?>
+                <article class="rounded-xl border border-purple-100 bg-purple-50/50 p-4 text-xs"><p class="font-black text-purple-900">Maternal Referral — <?= esc($record['referral_status']) ?></p><p class="mt-1 text-slate-600">To: <?= esc($record['referred_to']) ?> · <?= esc($record['urgency']) ?></p><p class="mt-1 text-slate-500"><?= esc($record['referral_reason']) ?></p></article>
+              <?php endforeach; ?>
+              <?php foreach ($birthRecords as $record): ?>
+                <article class="rounded-xl border border-emerald-100 bg-emerald-50/50 p-4 text-xs"><p class="font-black text-emerald-900">Birth Record — <?= esc($record['child_name']) ?></p><p class="mt-1 text-slate-600">Born <?= esc($record['date_of_birth']) ?> · Certificate: <?= esc($record['birth_certificate_number']) ?></p></article>
+              <?php endforeach; ?>
+            </div>
+          </div>
+        <?php endif; ?>
       </section>
 
       <!-- 3. IMMUNIZATION TAB -->
@@ -1228,6 +1589,16 @@ $events = [
                 <span class="rounded-full px-3 py-1 font-bold <?= strtolower($cert['validity_status']) === 'valid' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700' ?>">
                   <?= esc($cert['validity_status']) ?>
                 </span>
+                <?php
+                  $certificateStatus = strtolower((string)($cert['validity_status'] ?? ''));
+                  $certificateReady = (str_contains($certificateStatus, 'valid') || str_contains($certificateStatus, 'approved') || str_contains($certificateStatus, 'issued'))
+                    && !str_contains($certificateStatus, 'invalid') && !str_contains($certificateStatus, 'revoked');
+                ?>
+                <?php if ($certificateReady): ?>
+                  <a href="ResidentDashboard.php?certificate_document=<?= (int)$cert['id'] ?>" target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 rounded-xl bg-teal-700 px-3 py-2 font-bold text-white hover:bg-teal-800">
+                    <i data-lucide="file-badge" class="h-3.5 w-3.5"></i> View / Print Certificate
+                  </a>
+                <?php endif; ?>
               </div>
             </article>
           <?php endforeach; endif; ?>
@@ -1423,7 +1794,49 @@ $events = [
         </div>
       </section>
 
-      <!-- 6. EMERGENCY & REFERRAL TAB -->
+      <!-- NEARBY RHU & BARANGAY MAP TAB -->
+      <section data-tab-panel="map" class="hidden space-y-6">
+        <div class="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p class="text-[10px] font-bold uppercase tracking-widest text-teal-600">Community navigation</p>
+            <h2 class="mt-1 text-xl font-black text-slate-900">RHU & nearby barangay locations</h2>
+            <p class="mt-1 max-w-2xl text-xs leading-5 text-slate-500">Allow location access to see your position, nearby health facilities and barangay halls. Distances shown are straight-line estimates.</p>
+          </div>
+          <button id="map-locate-button" type="button" class="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-teal-700 px-5 py-3 text-xs font-bold text-white shadow-lg shadow-teal-700/20 hover:bg-teal-800">
+            <i data-lucide="locate-fixed" class="h-4 w-4"></i><span>Use my location</span>
+          </button>
+        </div>
+
+        <div id="map-status" role="status" aria-live="polite" class="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 p-3 text-xs font-semibold text-sky-800">
+          <i data-lucide="info" class="h-4 w-4 shrink-0"></i>
+          <span>Select “Use my location” to calculate your distance from the RHU and nearby barangay facilities.</span>
+        </div>
+
+        <div class="grid gap-6 lg:grid-cols-[minmax(0,1.65fr)_minmax(18rem,.75fr)]">
+          <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div id="resident-location-map" aria-label="Interactive map showing your location, nearby RHUs and barangay halls"></div>
+          </div>
+          <aside class="min-w-0">
+            <div class="mb-3 flex items-center justify-between">
+              <h3 class="text-sm font-black text-slate-900">Nearest locations</h3>
+              <span id="map-result-count" class="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-500">1 location</span>
+            </div>
+            <div id="nearby-location-list" class="max-h-[31rem] space-y-3 overflow-y-auto pr-1">
+              <article class="rounded-2xl border border-teal-200 bg-teal-50/60 p-4">
+                <div class="flex items-start justify-between gap-3">
+                  <div><span class="text-[9px] font-black uppercase tracking-wider text-teal-700">Rural Health Unit</span><h4 class="mt-1 text-sm font-black text-slate-900">Nasugbu Rural Health Unit</h4><p class="mt-1 text-[11px] text-slate-500">Escalera St., Barangay 2, Nasugbu</p></div>
+                  <span class="rounded-lg bg-white p-2 text-teal-700"><i data-lucide="hospital" class="h-4 w-4"></i></span>
+                </div>
+                <p class="mt-3 text-xs font-bold text-slate-500">Distance: <strong data-rhu-distance class="text-slate-900">Enable location</strong></p>
+                <button id="main-rhu-route-button" type="button" class="mt-3 inline-flex items-center gap-1.5 text-xs font-bold text-teal-700 hover:underline"><i data-lucide="navigation" class="h-3.5 w-3.5"></i> Show directions</button>
+              </article>
+            </div>
+          </aside>
+        </div>
+        <p class="text-center text-[10px] text-slate-400">Map data © OpenStreetMap contributors. Nearby results depend on available community map data.</p>
+      </section>
+
+      <!-- EMERGENCY & REFERRAL TAB -->
       <section data-tab-panel="emergency" class="hidden space-y-6">
         <!-- Urgent Hotline Banner -->
         <div class="rounded-2xl bg-gradient-to-r from-rose-600 to-red-700 p-6 text-white shadow-lg space-y-4">
@@ -1544,29 +1957,29 @@ $events = [
   </div>
 
   <!-- OPD / RHU Appointment Modal -->
-  <div id="appointment-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm hidden">
-    <div class="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl space-y-5 max-h-[92vh] overflow-y-auto">
-      <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+  <div id="appointment-modal" class="fixed inset-0 z-[200] flex min-h-screen items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm hidden" role="dialog" aria-modal="true" aria-labelledby="appointment-modal-title">
+    <div class="m-auto w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl max-h-[90vh] overflow-y-auto" data-appointment-dialog>
+      <div class="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-100 bg-white pb-4">
         <div class="flex items-center gap-2.5">
           <div class="h-9 w-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center">
             <i data-lucide="calendar-plus" class="h-5 w-5"></i>
           </div>
           <div>
-            <h3 class="text-base font-extrabold text-slate-900">Book RHU Appointment</h3>
-            <p class="text-xs text-slate-500">Select appointment type, date, and available doctor or healthcare provider.</p>
+            <h3 id="appointment-modal-title" class="text-base font-extrabold text-slate-900">Book RHU Appointment</h3>
+            <p class="mt-0.5 text-xs leading-5 text-slate-500">Choose the appointment type, preferred date, and an available healthcare provider.</p>
           </div>
         </div>
-        <button type="button" onclick="document.getElementById('appointment-modal').classList.add('hidden')" class="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">
+        <button type="button" data-appointment-close class="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors" aria-label="Close appointment form">
           <i data-lucide="x" class="h-5 w-5"></i>
         </button>
       </div>
 
-      <form method="post" action="ResidentDashboard.php?tab=records" class="space-y-4 text-xs">
+      <form method="post" action="ResidentDashboard.php?tab=records" class="mt-4 grid grid-cols-1 gap-4 text-xs sm:grid-cols-2">
         <input type="hidden" name="form" value="appointment_request">
         <input type="hidden" name="csrf_token" value="<?= esc($dashboardCsrf) ?>">
 
         <!-- 1. Select Appointment Category / Type -->
-        <div>
+        <div class="min-w-0">
           <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1.5">Type of Appointment *</label>
           <select id="appointment_type_select" name="appointment_type" required onchange="filterAvailableStaff()" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-bold text-slate-800 outline-none focus:border-teal-500 focus:bg-white transition-all">
             <option value="General Medical Consultation">🩺 General Medical Consultation (Physician / Doctor)</option>
@@ -1579,30 +1992,30 @@ $events = [
         </div>
 
         <!-- 2. Select Appointment Date -->
-        <div>
+        <div class="min-w-0">
           <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1.5">Preferred Appointment Date *</label>
           <input type="date" id="appointment_date_input" name="preferred_date" required min="<?= date('Y-m-d') ?>" value="<?= date('Y-m-d') ?>" onchange="filterAvailableStaff()" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-800 outline-none focus:border-teal-500 focus:bg-white transition-all">
         </div>
 
         <!-- 3. Available Healthcare Provider (Doctor / Nurse / Staff) -->
-        <div>
+        <div class="sm:col-span-2">
           <div class="flex items-center justify-between mb-1.5">
             <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px]">Assigned Available Doctor / Staff *</label>
             <span class="text-[10px] text-teal-600 font-bold" id="staff_count_badge">Loading available staff...</span>
           </div>
-          <div id="staff_selection_container" class="space-y-2 max-h-48 overflow-y-auto p-1 border border-slate-100 rounded-2xl bg-slate-50/50">
+          <div id="staff_selection_container" class="grid max-h-40 grid-cols-1 gap-2 overflow-y-auto rounded-2xl border border-slate-100 bg-slate-50/50 p-1.5 sm:grid-cols-2">
             <!-- Dynamically populated by filterAvailableStaff() JavaScript -->
           </div>
         </div>
 
         <!-- 4. Chief Complaint / Notes -->
-        <div>
+        <div class="sm:col-span-2">
           <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1.5">Chief Complaint / Reason for Visit *</label>
-          <textarea name="chief_complaint" rows="3" required placeholder="Describe your medical symptoms, reason for consultation, or assistance needed..." class="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white transition-all"></textarea>
+          <textarea name="chief_complaint" rows="2" required placeholder="Briefly describe your symptoms or reason for consultation..." class="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-medium text-slate-800 outline-none transition-all focus:border-teal-500 focus:bg-white"></textarea>
         </div>
 
-        <div class="pt-2 flex items-center justify-end gap-2 border-t border-slate-100">
-          <button type="button" onclick="document.getElementById('appointment-modal').classList.add('hidden')" class="rounded-xl px-4 py-2.5 font-bold text-slate-600 hover:bg-slate-100 transition-colors">
+        <div class="sticky bottom-0 z-10 -mx-1 flex items-center justify-end gap-2 border-t border-slate-100 bg-white px-1 pt-4 sm:col-span-2">
+          <button type="button" data-appointment-close class="rounded-xl px-4 py-2.5 font-bold text-slate-600 hover:bg-slate-100 transition-colors">
             Cancel
           </button>
           <button type="submit" class="rounded-xl bg-teal-600 px-5 py-2.5 font-bold text-white shadow-md hover:bg-teal-700 transition-colors">
@@ -1619,6 +2032,294 @@ $events = [
 
       let allRhuStaff = <?= json_encode($rhuStaffList ?? [], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
       const staffBookings = <?= json_encode($staffBookingsPerDate ?? [], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+      const mainRhu = { name: 'Nasugbu Rural Health Unit', type: 'Rural Health Unit', lat: 14.07423, lng: 120.63096, address: 'Escalera St., Barangay 2, Nasugbu' };
+      let residentMap = null;
+      let residentMapLayer = null;
+      let residentRouteLayer = null;
+      let residentPosition = null;
+      let mapIsLoading = false;
+
+      const escapeMapText = (value) => String(value ?? '').replace(/[&<>"']/g, character => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+      })[character]);
+
+      const distanceKm = (from, to) => {
+        const radians = degrees => degrees * Math.PI / 180;
+        const deltaLat = radians(to.lat - from.lat);
+        const deltaLng = radians(to.lng - from.lng);
+        const a = Math.sin(deltaLat / 2) ** 2
+          + Math.cos(radians(from.lat)) * Math.cos(radians(to.lat)) * Math.sin(deltaLng / 2) ** 2;
+        return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      };
+
+      const formatMapDistance = kilometres => kilometres < 1
+        ? `${Math.round(kilometres * 1000)} m`
+        : `${kilometres.toFixed(kilometres < 10 ? 1 : 0)} km`;
+
+      const setMapStatus = (message, tone = 'sky') => {
+        const status = document.getElementById('map-status');
+        if (!status) return;
+        const styles = {
+          sky: 'border-sky-200 bg-sky-50 text-sky-800',
+          teal: 'border-teal-200 bg-teal-50 text-teal-800',
+          rose: 'border-rose-200 bg-rose-50 text-rose-800',
+          amber: 'border-amber-200 bg-amber-50 text-amber-800'
+        };
+        status.className = `flex items-center gap-2 rounded-xl border p-3 text-xs font-semibold ${styles[tone] || styles.sky}`;
+        status.querySelector('span').textContent = message;
+      };
+
+      const mapPlaceIcon = (place) => L.divIcon({
+        className: '',
+        html: `<span style="display:flex;width:30px;height:30px;align-items:center;justify-content:center;border:3px solid white;border-radius:999px;background:${place.type === 'Barangay' ? '#7c3aed' : '#0f766e'};color:white;box-shadow:0 2px 8px rgba(15,23,42,.3);font-size:14px">${place.type === 'Barangay' ? '⌂' : '✚'}</span>`,
+        iconSize: [30, 30], iconAnchor: [15, 15]
+      });
+
+      const renderNearbyPlaces = places => {
+        const list = document.getElementById('nearby-location-list');
+        const count = document.getElementById('map-result-count');
+        if (!list) return;
+        const sorted = places.map(place => ({
+          ...place,
+          distance: residentPosition ? distanceKm(residentPosition, place) : null
+        })).sort((a, b) => (a.distance ?? 9999) - (b.distance ?? 9999));
+
+        count.textContent = `${sorted.length} location${sorted.length === 1 ? '' : 's'}`;
+        list.innerHTML = sorted.map(place => {
+          const isBarangay = place.type === 'Barangay';
+          const accent = isBarangay ? 'violet' : 'teal';
+          const distance = place.distance === null ? 'Enable location' : formatMapDistance(place.distance);
+          return `<article class="rounded-2xl border border-${accent}-200 bg-${accent}-50/60 p-4">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0"><span class="text-[9px] font-black uppercase tracking-wider text-${accent}-700">${escapeMapText(place.type)}</span>
+                <h4 class="mt-1 truncate text-sm font-black text-slate-900" title="${escapeMapText(place.name)}">${escapeMapText(place.name)}</h4>
+                <p class="mt-1 text-[11px] text-slate-500">${escapeMapText(place.address || (isBarangay ? 'Barangay location' : 'Health facility'))}</p>
+              </div>
+              <span class="rounded-lg bg-white p-2 text-${accent}-700">${isBarangay ? '⌂' : '✚'}</span>
+            </div>
+            <p class="mt-3 text-xs font-bold text-slate-500">Distance: <strong class="text-slate-900">${distance}</strong></p>
+            <div class="mt-3 flex gap-4">
+              <button type="button" data-map-focus="${place.lat},${place.lng}" class="text-xs font-bold text-slate-600 hover:underline">Show on map</button>
+              <button type="button" data-map-route="${place.lat},${place.lng}" data-map-route-name="${escapeMapText(place.name)}" class="inline-flex items-center gap-1 text-xs font-bold text-${accent}-700 hover:underline">Show directions →</button>
+            </div>
+          </article>`;
+        }).join('');
+
+        list.querySelectorAll('[data-map-focus]').forEach(button => button.addEventListener('click', () => {
+          const [lat, lng] = button.dataset.mapFocus.split(',').map(Number);
+          residentMap.setView([lat, lng], 16);
+        }));
+        list.querySelectorAll('[data-map-route]').forEach(button => button.addEventListener('click', () => {
+          const [lat, lng] = button.dataset.mapRoute.split(',').map(Number);
+          showResidentRoute({ lat, lng, name: button.dataset.mapRouteName });
+        }));
+      };
+
+      const showResidentRoute = async destination => {
+        if (!residentPosition) {
+          setMapStatus('Use your current location first before requesting directions.', 'amber');
+          return;
+        }
+        setMapStatus(`Calculating the driving route to ${destination.name}…`);
+        const endpoint = `https://router.project-osrm.org/route/v1/driving/${residentPosition.lng},${residentPosition.lat};${destination.lng},${destination.lat}?overview=full&geometries=geojson&steps=true`;
+        try {
+          const response = await fetch(endpoint);
+          if (!response.ok) throw new Error('Routing service unavailable');
+          const data = await response.json();
+          const route = data.routes?.[0];
+          if (!route) throw new Error('No route found');
+          if (residentRouteLayer) residentRouteLayer.remove();
+          residentRouteLayer = L.geoJSON(route.geometry, {
+            style: { color: '#0f766e', weight: 6, opacity: .9, lineCap: 'round', lineJoin: 'round' }
+          }).addTo(residentMap);
+          residentMap.fitBounds(residentRouteLayer.getBounds(), { padding: [35, 35] });
+          const drivingDistance = formatMapDistance(route.distance / 1000);
+          const minutes = Math.max(1, Math.round(route.duration / 60));
+          setMapStatus(`Driving route to ${destination.name}: approximately ${drivingDistance}, ${minutes} min.`, 'teal');
+        } catch (error) {
+          setMapStatus('A road route could not be calculated right now. Please try again in a moment.', 'rose');
+        }
+      };
+
+      const loadNearbyMapPlaces = async () => {
+        if (!residentPosition || mapIsLoading) return;
+        mapIsLoading = true;
+        setMapStatus('Google Maps is finding nearby RHUs, health centers and barangay locations…');
+        const { lat, lng } = residentPosition;
+        try {
+          const location = new google.maps.LatLng(lat, lng);
+          const [healthResults, barangayResults] = await Promise.all([
+            googlePlacesSearch({ location, radius: 15000, keyword: 'RHU rural health unit health center clinic hospital' }),
+            googlePlacesSearch({ location, radius: 15000, keyword: 'barangay hall barangay health center' })
+          ]);
+          const found = [...healthResults, ...barangayResults].map(place => {
+            const barangay = /barangay|brgy/i.test(place.name || '');
+            return {
+              name: place.name || (barangay ? 'Barangay facility' : 'Community health facility'),
+              type: barangay ? 'Barangay' : (/hospital/i.test(place.name || '') ? 'Hospital' : 'Health Center / RHU'),
+              lat: place.geometry.location.lat(), lng: place.geometry.location.lng(),
+              address: place.vicinity || ''
+            };
+          });
+
+          const unique = [mainRhu, ...found].filter((place, index, array) =>
+            array.findIndex(other => other.name.toLowerCase() === place.name.toLowerCase()) === index
+          ).sort((a, b) => distanceKm(residentPosition, a) - distanceKm(residentPosition, b)).slice(0, 16);
+          unique.forEach(place => addGoogleMarker(place, place.type === 'Barangay' ? '#7c3aed' : '#0f766e'));
+          renderNearbyPlaces(unique);
+          setMapStatus(`Showing ${unique.length} nearby locations, ordered by distance from you.`, 'teal');
+        } catch (error) {
+          addGoogleMarker(mainRhu);
+          renderNearbyPlaces([mainRhu]);
+          setMapStatus('Your location is shown, but Google Places could not load nearby results. Check that Places API is enabled.', 'amber');
+        } finally {
+          mapIsLoading = false;
+        }
+      };
+
+      function initializeResidentMap() {
+        initializeLeafletMap();
+      }
+
+      const locateResident = () => {
+        initializeResidentMap();
+        if (!residentMap) {
+          setMapStatus('Google Maps is still loading. Please try again in a moment.', 'amber');
+          return;
+        }
+        if (!navigator.geolocation) {
+          setMapStatus('Location is not supported by this browser. You can still view and navigate to the RHU.', 'rose');
+          return;
+        }
+        const button = document.getElementById('map-locate-button');
+        button.disabled = true;
+        button.querySelector('span').textContent = 'Locating…';
+        setMapStatus('Requesting your current location…');
+        navigator.geolocation.getCurrentPosition(position => {
+          residentPosition = { lat: position.coords.latitude, lng: position.coords.longitude };
+          mapMarkers.forEach(marker => marker.setMap(null));
+          mapMarkers = [];
+          addGoogleMarker({ ...residentPosition, name: 'Your current location', type: 'You' }, '#2563eb');
+          residentMap.setCenter(residentPosition);
+          residentMap.setZoom(14);
+          loadNearbyMapPlaces();
+          button.disabled = false;
+          button.querySelector('span').textContent = 'Refresh my location';
+        }, error => {
+          const messages = {
+            1: 'Location permission was denied. Enable it in your browser settings to calculate distances.',
+            2: 'Your location is currently unavailable. Check your device location settings and try again.',
+            3: 'Finding your location timed out. Please try again.'
+          };
+          setMapStatus(messages[error.code] || 'Your location could not be detected.', 'rose');
+          button.disabled = false;
+          button.querySelector('span').textContent = 'Try location again';
+        }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
+      };
+
+      const loadOpenStreetMapPlaces = async () => {
+        if (!residentPosition || mapIsLoading) return;
+        mapIsLoading = true;
+        setMapStatus('Finding nearby RHUs, health centers and barangay locations…');
+        const { lat, lng } = residentPosition;
+        const query = `[out:json][timeout:20];(
+          nwr(around:15000,${lat},${lng})["amenity"~"clinic|doctors|hospital|health_post"];
+          nwr(around:15000,${lat},${lng})["healthcare"~"clinic|doctor|hospital|centre"];
+          nwr(around:15000,${lat},${lng})["amenity"~"townhall|community_centre"]["name"~"Barangay|Brgy",i];
+          node(around:15000,${lat},${lng})["place"="barangay"];
+        );out center tags;`;
+        try {
+          const response = await fetch('https://overpass-api.de/api/interpreter', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+            body: `data=${encodeURIComponent(query)}`
+          });
+          if (!response.ok) throw new Error('Map service unavailable');
+          const data = await response.json();
+          const found = data.elements.map(element => {
+            const point = element.center || element;
+            const tags = element.tags || {};
+            const barangay = tags.place === 'barangay' || (/barangay|brgy/i.test(tags.name || '') && /townhall|community_centre/.test(tags.amenity || ''));
+            return {
+              name: tags.name || (barangay ? 'Barangay facility' : 'Community health facility'),
+              type: barangay ? 'Barangay' : (/hospital/i.test(tags.amenity || tags.healthcare || '') ? 'Hospital' : 'Health Center / RHU'),
+              lat: Number(point.lat), lng: Number(point.lon),
+              address: [tags['addr:street'], tags['addr:barangay']].filter(Boolean).join(', ')
+            };
+          }).filter(place => Number.isFinite(place.lat) && Number.isFinite(place.lng));
+          const unique = [mainRhu, ...found].filter((place, index, array) =>
+            array.findIndex(other => other.name.toLowerCase() === place.name.toLowerCase()) === index
+          ).sort((a, b) => distanceKm(residentPosition, a) - distanceKm(residentPosition, b)).slice(0, 16);
+          unique.forEach(place => L.marker([place.lat, place.lng], { icon: mapPlaceIcon(place) })
+            .bindPopup(`<strong>${escapeMapText(place.name)}</strong><br><small>${escapeMapText(place.type)} · ${formatMapDistance(distanceKm(residentPosition, place))}</small>`)
+            .addTo(residentMapLayer));
+          renderNearbyPlaces(unique);
+          setMapStatus(`Showing ${unique.length} nearby locations, ordered by distance from you.`, 'teal');
+        } catch (error) {
+          L.marker([mainRhu.lat, mainRhu.lng], { icon: mapPlaceIcon(mainRhu) }).bindPopup(mainRhu.name).addTo(residentMapLayer);
+          renderNearbyPlaces([mainRhu]);
+          setMapStatus('Your location is shown, but nearby community data could not be loaded. The main RHU remains available.', 'amber');
+        } finally {
+          mapIsLoading = false;
+        }
+      };
+
+      function initializeLeafletMap() {
+        if (!window.L) {
+          window.setTimeout(initializeLeafletMap, 150);
+          return;
+        }
+        if (!residentMap) {
+          residentMap = L.map('resident-location-map', { zoomControl: true }).setView([mainRhu.lat, mainRhu.lng], 14);
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+          }).addTo(residentMap);
+          residentMapLayer = L.layerGroup().addTo(residentMap);
+          L.marker([mainRhu.lat, mainRhu.lng], { icon: mapPlaceIcon(mainRhu) })
+            .bindPopup(`<strong>${mainRhu.name}</strong><br><small>${mainRhu.address}</small>`)
+            .addTo(residentMapLayer);
+        }
+        window.setTimeout(() => residentMap.invalidateSize(), 50);
+      }
+
+      const locateResidentWithLeaflet = () => {
+        initializeLeafletMap();
+        if (!navigator.geolocation) {
+          setMapStatus('Location is not supported by this browser. You can still view and navigate to the RHU.', 'rose');
+          return;
+        }
+        const button = document.getElementById('map-locate-button');
+        button.disabled = true;
+        button.querySelector('span').textContent = 'Locating…';
+        setMapStatus('Requesting your current location…');
+        navigator.geolocation.getCurrentPosition(position => {
+          residentPosition = { lat: position.coords.latitude, lng: position.coords.longitude };
+          if (residentRouteLayer) {
+            residentRouteLayer.remove();
+            residentRouteLayer = null;
+          }
+          residentMapLayer.clearLayers();
+          L.marker([residentPosition.lat, residentPosition.lng], {
+            icon: L.divIcon({ className: '', html: '<div class="map-user-marker"></div>', iconSize: [22, 22], iconAnchor: [11, 11] })
+          }).bindPopup('<strong>Your current location</strong>').addTo(residentMapLayer).openPopup();
+          residentMap.setView([residentPosition.lat, residentPosition.lng], 14);
+          loadOpenStreetMapPlaces();
+          button.disabled = false;
+          button.querySelector('span').textContent = 'Refresh my location';
+        }, error => {
+          const messages = {
+            1: 'Location permission was denied. Enable it in your browser settings to calculate distances.',
+            2: 'Your location is currently unavailable. Check your device location settings and try again.',
+            3: 'Finding your location timed out. Please try again.'
+          };
+          setMapStatus(messages[error.code] || 'Your location could not be detected.', 'rose');
+          button.disabled = false;
+          button.querySelector('span').textContent = 'Try location again';
+        }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
+      };
+
+      document.getElementById('map-locate-button')?.addEventListener('click', locateResidentWithLeaflet);
+      document.getElementById('main-rhu-route-button')?.addEventListener('click', () => showResidentRoute(mainRhu));
 
       if (!allRhuStaff || allRhuStaff.length === 0) {
         allRhuStaff = [
@@ -1722,7 +2423,7 @@ $events = [
           }
 
           const label = document.createElement('label');
-          label.className = `flex items-center justify-between p-3 rounded-xl border ${isDisabled ? 'border-slate-200 bg-slate-100/70 opacity-60 cursor-not-allowed' : 'border-slate-200 bg-slate-50 hover:bg-teal-50/50 hover:border-teal-300 cursor-pointer'} transition-all`;
+          label.className = `grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-xl border p-2.5 ${isDisabled ? 'border-slate-200 bg-slate-100/70 opacity-60 cursor-not-allowed' : 'border-slate-200 bg-white hover:bg-teal-50/50 hover:border-teal-300 cursor-pointer'} transition-all`;
           
           let checkAttr = '';
           if (!isDisabled && !hasCheckedFirst) {
@@ -1732,12 +2433,12 @@ $events = [
           let disabledAttr = isDisabled ? 'disabled' : '';
 
           label.innerHTML = `
-            <div class="flex items-center gap-3">
+            <div class="flex min-w-0 items-center gap-2.5">
               <input type="radio" name="physician_id" value="${staff.staff_id}" ${checkAttr} ${disabledAttr} class="text-teal-600 focus:ring-teal-500 h-4 w-4">
-              <div>
-                <p class="font-bold text-slate-800 text-xs">${staff.first_name || ''} ${staff.last_name || ''}</p>
-                <p class="text-[10px] text-slate-500 font-medium">${staff.staff_type || 'RHU Staff'} ${staff.specialization ? '• ' + staff.specialization : ''}</p>
-                <p class="text-[9px] text-slate-400 font-mono">📅 Duty: ${workDaysStr}</p>
+              <div class="min-w-0">
+                <p class="truncate font-bold text-slate-800 text-xs">${staff.first_name || ''} ${staff.last_name || ''}</p>
+                <p class="truncate text-[10px] text-slate-500 font-medium">${staff.staff_type || 'RHU Staff'} ${staff.specialization ? '• ' + staff.specialization : ''}</p>
+                <p class="truncate text-[9px] text-slate-400 font-mono" title="Duty: ${workDaysStr}">📅 Duty: ${workDaysStr}</p>
               </div>
             </div>
             <div>${statusBadge}</div>
@@ -1747,6 +2448,48 @@ $events = [
       };
 
       filterAvailableStaff();
+
+      const appointmentModal = document.getElementById('appointment-modal');
+      let appointmentTrigger = null;
+
+      // Keep the dialog outside animated/transformed dashboard containers so
+      // fixed positioning is calculated against the actual browser viewport.
+      if (appointmentModal && appointmentModal.parentElement !== document.body) {
+        document.body.appendChild(appointmentModal);
+      }
+
+      const openAppointmentModal = trigger => {
+        if (!appointmentModal) return;
+        appointmentTrigger = trigger || document.activeElement;
+        appointmentModal.classList.remove('hidden');
+        document.body.classList.add('overflow-hidden');
+        filterAvailableStaff();
+        window.setTimeout(() => {
+          appointmentModal.querySelector('select, input, textarea, button')?.focus();
+        }, 0);
+      };
+
+      const closeAppointmentModal = () => {
+        if (!appointmentModal) return;
+        appointmentModal.classList.add('hidden');
+        document.body.classList.remove('overflow-hidden');
+        appointmentTrigger?.focus?.();
+      };
+
+      document.querySelectorAll('[data-appointment-open]').forEach(button => {
+        button.addEventListener('click', () => openAppointmentModal(button));
+      });
+      document.querySelectorAll('[data-appointment-close]').forEach(button => {
+        button.addEventListener('click', closeAppointmentModal);
+      });
+      appointmentModal?.addEventListener('click', event => {
+        if (event.target === appointmentModal) closeAppointmentModal();
+      });
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && appointmentModal && !appointmentModal.classList.contains('hidden')) {
+          closeAppointmentModal();
+        }
+      });
 
       const sidebar = document.getElementById('sidebar');
       const sidebarOverlay = document.getElementById('sidebar-overlay');
@@ -1765,6 +2508,7 @@ $events = [
         'certificates': 'Health Certificates',
         'family': 'Family Members',
         'events': 'Events & Programs',
+        'map': 'Nearby Map',
         'contact': 'Contact RHU',
         'emergency': 'Emergency & Referral'
       };
@@ -1833,6 +2577,7 @@ $events = [
       }
 
       window.scrollTo({ top: 0, behavior: 'smooth' });
+      if (tab === 'map') window.setTimeout(initializeLeafletMap, 80);
     };
 
       buttons.forEach(button => button.addEventListener('click', () => setTab(button.dataset.tabButton)));
@@ -1849,9 +2594,20 @@ $events = [
       const notificationButton = document.querySelector('[data-notifications]');
       const notificationPanel = document.querySelector('[data-notification-panel]');
       if (notificationButton && notificationPanel) {
-        notificationButton.addEventListener('click', () => notificationPanel.classList.toggle('hidden'));
+        notificationButton.addEventListener('click', (e) => {
+          e.stopPropagation();
+          notificationPanel.classList.toggle('hidden');
+        });
         const closeButton = document.querySelector('[data-close-notifications]');
         if (closeButton) closeButton.addEventListener('click', () => notificationPanel.classList.add('hidden'));
+
+        document.addEventListener('click', (e) => {
+          if (!notificationPanel.classList.contains('hidden')) {
+            if (!notificationPanel.contains(e.target) && !notificationButton.contains(e.target)) {
+              notificationPanel.classList.add('hidden');
+            }
+          }
+        });
       }
 
       const dependentModal = document.getElementById('dependent-modal');
@@ -1935,7 +2691,7 @@ $events = [
             <p class="text-xs text-slate-500">Edit medical information for your RHU resident record.</p>
           </div>
         </div>
-        <button type="button" onclick="document.getElementById('edit-health-profile-modal').classList.add('hidden')" class="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">
+        <button type="button" onclick="document.getElementById('edit-health-profile-modal')?.classList.add('hidden')" class="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">
           <i data-lucide="x" class="h-5 w-5"></i>
         </button>
       </div>
@@ -2024,36 +2780,36 @@ $events = [
 
         <div>
           <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Known Allergies</label>
-          <textarea name="allergies" rows="2" placeholder="List food, drug, or environmental allergies..." class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white"><?= esc($healthProfile['allergies'] ?? '') ?></textarea>
+          <textarea name="allergies" rows="2" placeholder="List food, drug, or environmental allergies..." class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white"><?= esc($healthProfile['allergies'] ?? ($resident['allergies'] ?? '')) ?></textarea>
         </div>
 
         <div>
           <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Chronic Conditions / Illnesses</label>
-          <textarea name="chronic_conditions" rows="2" placeholder="Hypertension, Asthma, Diabetes, etc." class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white"><?= esc($healthProfile['chronic_conditions'] ?? '') ?></textarea>
+          <textarea name="chronic_conditions" rows="2" placeholder="Hypertension, Asthma, Diabetes, etc." class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white"><?= esc($healthProfile['chronic_conditions'] ?? ($healthProfile['medical_conditions'] ?? ($resident['medical_conditions'] ?? ''))) ?></textarea>
         </div>
 
         <div>
           <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Current Prescribed Medications</label>
-          <textarea name="current_medications" rows="2" placeholder="e.g. Amlodipine 5mg once daily..." class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white"><?= esc($healthProfile['current_medications'] ?? '') ?></textarea>
+          <textarea name="current_medications" rows="2" placeholder="e.g. Amlodipine 5mg once daily..." class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white"><?= esc($healthProfile['current_medications'] ?? ($healthProfile['medications'] ?? '')) ?></textarea>
         </div>
 
         <div class="grid grid-cols-3 gap-3 border-t border-slate-100 pt-3">
           <div>
             <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Emergency Contact Person</label>
-            <input type="text" name="emergency_contact_name" value="<?= esc($healthProfile['emergency_contact_name'] ?? '') ?>" placeholder="Name" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+            <input type="text" name="emergency_contact_name" value="<?= esc($healthProfile['emergency_contact_name'] ?? ($resident['emergency_contact_name'] ?? '')) ?>" placeholder="Name" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
           </div>
           <div>
             <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Relationship</label>
-            <input type="text" name="emergency_contact_relationship" value="<?= esc($healthProfile['emergency_contact_relationship'] ?? '') ?>" placeholder="Spouse, Mother, etc." class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+            <input type="text" name="emergency_contact_relationship" value="<?= esc($healthProfile['emergency_contact_relationship'] ?? ($resident['emergency_contact_relationship'] ?? '')) ?>" placeholder="Spouse, Mother, etc." class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
           </div>
           <div>
             <label class="block font-bold text-slate-700 uppercase tracking-wider text-[10px] mb-1">Emergency Phone #</label>
-            <input type="text" name="emergency_contact_phone" value="<?= esc($healthProfile['emergency_contact_phone'] ?? '') ?>" placeholder="0917XXXXXXX" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
+            <input type="text" name="emergency_contact_phone" value="<?= esc($healthProfile['emergency_contact_phone'] ?? ($resident['emergency_contact_phone'] ?? '')) ?>" placeholder="0917XXXXXXX" class="w-full rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white">
           </div>
         </div>
 
         <div class="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
-          <button type="button" onclick="document.getElementById('edit-health-profile-modal').classList.add('hidden')" class="rounded-xl px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors">
+          <button type="button" onclick="document.getElementById('edit-health-profile-modal')?.classList.add('hidden')" class="rounded-xl px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors">
             Cancel
           </button>
           <button type="submit" class="rounded-xl bg-teal-600 px-5 py-2.5 text-xs font-bold text-white shadow-md hover:bg-teal-700 transition-colors">
@@ -2063,6 +2819,324 @@ $events = [
       </form>
     </div>
   </div>
+  <!-- GLOBAL NOTIFICATION POPOVER PANEL -->
+  <div id="global-notification-panel" data-notification-panel class="hidden fixed top-16 right-4 sm:right-8 z-[99999] w-[calc(100vw-2rem)] sm:w-96 max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-800 shadow-2xl transition-all">
+    <!-- Header Bar -->
+    <div class="flex items-center justify-between border-b border-slate-100 px-4 py-3 bg-slate-50">
+      <div class="flex items-center gap-2">
+        <span class="font-bold text-slate-900 text-xs">Notifications</span>
+        <span id="notif-header-count" class="rounded-full bg-teal-100 px-2 py-0.5 text-[10px] font-extrabold text-teal-800 border border-teal-200">0 Unread</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <button type="button" onclick="markAllNotificationsRead()" class="text-[10px] font-bold text-teal-700 hover:text-teal-900 hover:underline">Mark all read</button>
+        <button type="button" onclick="toggleNotificationPanel(event)" class="text-xs font-bold text-slate-400 hover:text-slate-600 p-1">✕</button>
+      </div>
+    </div>
+
+    <!-- Action Toolbar for Selection & Deletion -->
+    <div class="flex items-center justify-between border-b border-slate-100 px-4 py-2 bg-slate-100/80 text-[11px]">
+      <label class="flex items-center gap-1.5 font-bold text-slate-700 cursor-pointer select-none">
+        <input type="checkbox" id="notif-select-all" onclick="toggleSelectAllNotifications(this)" class="rounded text-teal-600 focus:ring-teal-500">
+        <span>Select All</span>
+      </label>
+      <button type="button" id="notif-delete-selected-btn" onclick="deleteSelectedNotifications()" disabled class="flex items-center gap-1 text-[10px] font-bold text-rose-600 hover:text-rose-800 disabled:opacity-40 disabled:cursor-not-allowed transition-all">
+        <span>🗑 Delete Selected</span>
+      </button>
+    </div>
+
+    <!-- Notifications List Container -->
+    <div id="notif-items-list" class="divide-y divide-slate-100 text-xs max-h-80 overflow-y-auto bg-white">
+      <div class="p-4 text-center text-slate-400 text-xs">Loading notifications...</div>
+    </div>
+  </div>
+
+  <!-- NOTIFICATION DETAIL MODAL -->
+  <div id="notification-detail-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
+    <div class="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div class="flex items-center gap-2.5">
+          <div class="h-9 w-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center">
+            <i data-lucide="bell" class="h-5 w-5"></i>
+          </div>
+          <div>
+            <h3 class="text-base font-extrabold text-slate-900" id="notif-modal-title">RHU Notification</h3>
+            <p class="text-[10px] text-slate-400 font-mono" id="notif-modal-date"></p>
+          </div>
+        </div>
+        <button type="button" onclick="closeNotificationModal()" class="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+          ✕
+        </button>
+      </div>
+
+      <div class="space-y-3 text-xs">
+        <div class="rounded-2xl border border-slate-100 bg-slate-50 p-4 leading-relaxed font-medium text-slate-800" id="notif-modal-body">
+          <!-- Notification Content -->
+        </div>
+        <div id="notif-modal-action-container" class="hidden">
+          <a id="notif-modal-action-link" href="#" class="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-teal-600 py-2.5 text-xs font-bold text-white hover:bg-teal-700">
+            View Related Section →
+          </a>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-between border-t border-slate-100 pt-3 text-xs">
+        <button type="button" id="notif-modal-delete-btn" onclick="" class="flex items-center gap-1 font-bold text-rose-600 hover:text-rose-800">
+          🗑 Delete Notification
+        </button>
+        <button type="button" onclick="closeNotificationModal()" class="rounded-xl bg-slate-100 px-4 py-2 font-bold text-slate-700 hover:bg-slate-200">
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function toggleNotificationPanel(event) {
+      if (event) {
+        event.stopPropagation();
+        if (typeof event.preventDefault === 'function') event.preventDefault();
+      }
+      const panel = document.getElementById('global-notification-panel') || document.querySelector('[data-notification-panel]');
+      if (panel) {
+        panel.classList.toggle('hidden');
+      }
+    }
+
+    document.addEventListener('click', (event) => {
+      const panel = document.getElementById('global-notification-panel') || document.querySelector('[data-notification-panel]');
+      const bell = document.getElementById('notification-bell-btn') || document.querySelector('[data-notifications]');
+      if (panel && !panel.classList.contains('hidden')) {
+        if (bell && (panel.contains(event.target) || bell.contains(event.target))) return;
+        if (!panel.contains(event.target)) {
+          panel.classList.add('hidden');
+        }
+      }
+    });
+
+    let currentNotifications = [];
+    let notifPollTimer = null;
+
+    async function fetchNotifications() {
+      try {
+        const res = await fetch('ResidentDashboard.php?api=get_notifications');
+        const data = await res.json();
+        if (data && data.success) {
+          currentNotifications = data.notifications || [];
+          renderNotificationList(currentNotifications, data.unread_count || 0);
+        }
+      } catch (err) {
+        console.error('Error fetching notifications:', err);
+      }
+    }
+
+    function renderNotificationList(items, unreadCount) {
+      const badge = document.getElementById('notif-badge-count');
+      const headerCount = document.getElementById('notif-header-count');
+      const list = document.getElementById('notif-items-list');
+
+      if (badge) {
+        if (unreadCount > 0) {
+          badge.textContent = unreadCount > 99 ? '99+' : unreadCount;
+          badge.classList.remove('hidden');
+        } else {
+          badge.classList.add('hidden');
+        }
+      }
+
+      if (headerCount) {
+        headerCount.textContent = `${unreadCount} Unread`;
+      }
+
+      if (!list) return;
+
+      if (items.length === 0) {
+        list.innerHTML = `
+          <div class="p-6 text-center text-slate-400">
+            <span class="text-2xl">🔔</span>
+            <p class="mt-1 text-xs font-bold text-slate-600">No notifications</p>
+            <p class="text-[10px]">You are all caught up!</p>
+          </div>`;
+        updateDeleteSelectedBtnState();
+        return;
+      }
+
+      const checkedIds = new Set(
+        [...document.querySelectorAll('.notif-checkbox:checked')].map(cb => cb.value)
+      );
+
+      list.innerHTML = items.map(item => {
+        const isChecked = checkedIds.has(String(item.id)) ? 'checked' : '';
+        const unreadBg = !item.is_read ? 'bg-teal-50/60 font-bold border-l-4 border-l-teal-600' : 'hover:bg-slate-50';
+        const unreadDot = !item.is_read ? '<span class="h-2 w-2 rounded-full bg-teal-600 shrink-0"></span>' : '';
+        
+        return `
+          <div class="group flex items-start justify-between gap-2 p-3 text-xs transition-all ${unreadBg}">
+            <div class="flex items-start gap-2.5 min-w-0 flex-1">
+              <input type="checkbox" value="${item.id}" ${isChecked} onchange="onNotifCheckboxChange()" class="notif-checkbox mt-1 rounded text-teal-600 focus:ring-teal-500 shrink-0">
+              <div class="min-w-0 flex-1 cursor-pointer" onclick="openNotificationDetail(${item.id})">
+                <div class="flex items-center gap-1.5">
+                  ${unreadDot}
+                  <p class="text-slate-800 font-semibold truncate ${!item.is_read ? 'font-bold' : ''}">${escapeHtml(item.message)}</p>
+                </div>
+                <p class="mt-1 text-[10px] text-slate-400 font-mono">${escapeHtml(item.time_ago || item.created_at)}</p>
+              </div>
+            </div>
+            <button type="button" onclick="deleteOneNotification(${item.id}, event)" title="Delete notification" class="opacity-70 group-hover:opacity-100 p-1 text-slate-400 hover:text-rose-600 transition-colors shrink-0">
+              🗑
+            </button>
+          </div>
+        `;
+      }).join('');
+
+      updateDeleteSelectedBtnState();
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function toggleSelectAllNotifications(masterCb) {
+      const checkboxes = document.querySelectorAll('.notif-checkbox');
+      checkboxes.forEach(cb => cb.checked = masterCb.checked);
+      updateDeleteSelectedBtnState();
+    }
+
+    function onNotifCheckboxChange() {
+      const master = document.getElementById('notif-select-all');
+      const all = document.querySelectorAll('.notif-checkbox');
+      const checked = document.querySelectorAll('.notif-checkbox:checked');
+      if (master) {
+        master.checked = all.length > 0 && checked.length === all.length;
+      }
+      updateDeleteSelectedBtnState();
+    }
+
+    function updateDeleteSelectedBtnState() {
+      const btn = document.getElementById('notif-delete-selected-btn');
+      const checked = document.querySelectorAll('.notif-checkbox:checked');
+      if (btn) {
+        btn.disabled = checked.length === 0;
+      }
+    }
+
+    async function deleteSelectedNotifications() {
+      const checked = [...document.querySelectorAll('.notif-checkbox:checked')].map(cb => cb.value);
+      if (checked.length === 0) return;
+      
+      if (!confirm(`Are you sure you want to delete ${checked.length} selected notification(s)?`)) return;
+
+      try {
+        const formData = new FormData();
+        formData.append('ids', JSON.stringify(checked));
+        const res = await fetch('ResidentDashboard.php?api=delete_notifications', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json();
+        if (data && data.success) {
+          const master = document.getElementById('notif-select-all');
+          if (master) master.checked = false;
+          await fetchNotifications();
+        }
+      } catch (err) {
+        console.error('Failed to delete notifications:', err);
+      }
+    }
+
+    async function deleteOneNotification(id, event) {
+      if (event) event.stopPropagation();
+      if (!confirm('Delete this notification?')) return;
+
+      try {
+        const formData = new FormData();
+        formData.append('ids', JSON.stringify([id]));
+        const res = await fetch('ResidentDashboard.php?api=delete_notifications', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json();
+        if (data && data.success) {
+          closeNotificationModal();
+          await fetchNotifications();
+        }
+      } catch (err) {
+        console.error('Failed to delete notification:', err);
+      }
+    }
+
+    async function markAllNotificationsRead() {
+      try {
+        const formData = new FormData();
+        formData.append('all', '1');
+        const res = await fetch('ResidentDashboard.php?api=mark_read', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json();
+        if (data && data.success) {
+          await fetchNotifications();
+        }
+      } catch (err) {
+        console.error('Failed to mark notifications read:', err);
+      }
+    }
+
+    async function openNotificationDetail(id) {
+      const notifPanel = document.querySelector('[data-notification-panel]');
+      if (notifPanel) notifPanel.classList.add('hidden');
+
+      const item = currentNotifications.find(n => n.id == id);
+      if (!item) return;
+
+      document.getElementById('notif-modal-title').textContent = item.title || 'RHU Notification';
+      document.getElementById('notif-modal-date').textContent = 'Sent: ' + (item.created_at || 'Just now');
+      document.getElementById('notif-modal-body').textContent = item.message || '';
+
+      const actionContainer = document.getElementById('notif-modal-action-container');
+      const actionLink = document.getElementById('notif-modal-action-link');
+      if (item.link_url) {
+        actionLink.href = item.link_url;
+        actionContainer.classList.remove('hidden');
+      } else {
+        actionContainer.classList.add('hidden');
+      }
+
+      const deleteBtn = document.getElementById('notif-modal-delete-btn');
+      if (deleteBtn) {
+        deleteBtn.onclick = (e) => deleteOneNotification(item.id, e);
+      }
+
+      const modal = document.getElementById('notification-detail-modal');
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+
+      if (!item.is_read) {
+        try {
+          const formData = new FormData();
+          formData.append('id', item.id);
+          await fetch('ResidentDashboard.php?api=mark_read', { method: 'POST', body: formData });
+          item.is_read = 1;
+          renderNotificationList(currentNotifications, Math.max(0, currentNotifications.filter(n => !n.is_read).length));
+        } catch (e) {}
+      }
+    }
+
+    function closeNotificationModal() {
+      const modal = document.getElementById('notification-detail-modal');
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      fetchNotifications();
+      notifPollTimer = setInterval(fetchNotifications, 5000);
+    });
+  </script>
 </body>
 </html>
 

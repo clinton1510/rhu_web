@@ -62,13 +62,7 @@
         if (original.className.match(/bg-white|font-bold/)) link.classList.add("is-active");
         linkContainer.appendChild(link);
       });
-      if (!tabLinks.some(link => /[?&]tab=audit(?:&|$)/.test(link.getAttribute("href") || ""))) {
-        const auditLink = document.createElement("a");
-        auditLink.href = "RHUDashboard.php?tab=audit";
-        auditLink.className = "staff-drawer-link";
-        auditLink.innerHTML = "<span aria-hidden=\"true\">▣</span><span>Audit Logs</span>";
-        linkContainer.appendChild(auditLink);
-      }
+
       document.body.appendChild(drawer);
 
       const closeDrawer = () => {

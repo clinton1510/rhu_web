@@ -10,7 +10,7 @@ $_GET['tab'] = 'audit';
 $_SERVER['REQUEST_METHOD'] = 'GET';
 
 ob_start();
-require dirname(__DIR__) . '/src/app/components/RHUDashboard.php';
+require dirname(__DIR__) . '/src/app/components/RHUAdminDashboard.php';
 $html = (string)ob_get_clean();
 
 if (!empty($_SESSION['rhu_admin_authenticated']) || isset($_SESSION['user'])) {

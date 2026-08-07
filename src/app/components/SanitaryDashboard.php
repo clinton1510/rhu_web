@@ -7,27 +7,74 @@ if (empty($_SESSION['rhu_staff_login']) || ($stType !== 'SANITARY_INSPECTOR' && 
     exit;
 }
 require_once __DIR__ . '/db.php';
-function e($value): string
-{
-    return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+require_once __DIR__ . '/portal.php';
+function e($value): string { return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8'); }
+$sanitaryFlashSuccess = $_SESSION['sanitary_flash_success'] ?? '';
+$sanitaryFlashError = $_SESSION['sanitary_flash_error'] ?? '';
+unset($_SESSION['sanitary_flash_success'], $_SESSION['sanitary_flash_error']);
+
+if (!empty($pdo)) {
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS sanitation_notices (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            inspection_id BIGINT UNSIGNED NOT NULL,
+            notice_number VARCHAR(60) NOT NULL UNIQUE,
+            issued_by_staff_id INT NULL,
+            issued_date DATE NOT NULL,
+            violations INT NOT NULL DEFAULT 0,
+            findings TEXT NULL,
+            notice_status VARCHAR(30) NOT NULL DEFAULT 'Issued',
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_notice_inspection (inspection_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    } catch (Throwable $noticeSchemaError) {}
 }
-function esc(mixed $v): string
-{
-    return htmlspecialchars((string) ($v ?? ''), ENT_QUOTES, 'UTF-8');
+
+if (!empty($pdo) && isset($_GET['print_inspection'])) {
+    $printId = (int)$_GET['print_inspection'];
+    $printStmt = $pdo->prepare("SELECT si.*, CONCAT(u.first_name, ' ', u.last_name) AS inspector_name
+        FROM sanitation_inspections si
+        LEFT JOIN staff s ON s.id = si.inspector_staff_id
+        LEFT JOIN users u ON u.id = s.user_id
+        WHERE si.id = :id LIMIT 1");
+    $printStmt->execute(['id' => $printId]);
+    $report = $printStmt->fetch(PDO::FETCH_ASSOC);
+    if (!$report) { http_response_code(404); exit('Inspection report not found.'); }
+    ?>
+    <!doctype html><html><head><meta charset="utf-8"><title>Inspection Report <?= e('SI' . $report['id']) ?></title>
+    <style>
+      body{font-family:Arial,sans-serif;color:#172033;margin:40px}
+      .print-button{margin-bottom:18px;border:0;border-radius:8px;background:#059669;color:#fff;padding:10px 16px;font-weight:700;cursor:pointer}
+      .head{display:grid;grid-template-columns:92px 1fr 92px;align-items:center;border-bottom:3px solid #0f766e;padding-bottom:16px;margin-bottom:24px;text-align:center}
+      .report-logo{width:82px;height:82px;object-fit:contain;justify-self:start}
+      .head-copy{grid-column:2}
+      .office{margin:0 0 5px;color:#475569;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+      h1{margin:0;color:#0f766e;font-size:25px}
+      .head p{margin:7px 0 0;color:#475569}
+      .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+      .box{border:1px solid #cbd5e1;border-radius:8px;padding:12px}
+      .full{grid-column:1/-1}
+      .label{font-size:11px;text-transform:uppercase;color:#64748b;font-weight:bold}
+      .value{margin-top:5px;font-size:14px}
+      .sign{margin-top:70px;width:260px;border-top:1px solid #334155;padding-top:6px;text-align:center}
+      @media print{.print-button{display:none}body{margin:18mm}.head{break-inside:avoid}.report-logo{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
+    </style></head>
+    <body><button class="print-button" onclick="window.print()">Print this report</button><div class="head"><img class="report-logo" src="nasugbu_seal.png" alt="Municipality of Nasugbu official seal"><div class="head-copy"><p class="office">Municipality of Nasugbu &middot; Rural Health Unit I</p><h1>Sanitation Inspection Report</h1><p>Official Inspection Record &middot; Report <?= e('SI' . $report['id']) ?></p></div></div>
+    <div class="grid">
+      <div class="box"><div class="label">Establishment</div><div class="value"><?= e($report['establishment']) ?></div></div>
+      <div class="box"><div class="label">Barangay</div><div class="value"><?= e($report['barangay']) ?></div></div>
+      <div class="box"><div class="label">Inspection Date</div><div class="value"><?= e($report['inspection_date']) ?></div></div>
+      <div class="box"><div class="label">Next Inspection</div><div class="value"><?= e($report['next_inspection_date'] ?: 'Not scheduled') ?></div></div>
+      <div class="box"><div class="label">Status</div><div class="value"><?= e($report['status']) ?></div></div>
+      <div class="box"><div class="label">Compliance</div><div class="value"><?= e($report['compliance_rate']) ?>% · <?= (int)$report['violations'] ?> violation(s)</div></div>
+      <div class="box full"><div class="label">Findings</div><div class="value"><?= nl2br(e($report['findings'] ?: 'No findings recorded.')) ?></div></div>
+    </div><div class="sign"><?= e($report['inspector_name'] ?: 'Sanitary Inspector') ?><br><small>Inspecting Officer</small></div>
+    <script>window.addEventListener('load',()=>window.print());</script></body></html>
+    <?php exit;
 }
-function tabUrl(string $tab, array $extra = []): string
-{
-    return '?' . http_build_query(array_merge(['tab' => $tab], $extra));
-}
-$tabs = [
-    'overview' => ['Overview', '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>'],
-    'inspections' => ['Inspections', '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg>'],
-    'certificates' => ['Certificates', '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>'],
-    'disease' => ['Disease', '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>'],
-];
-$tab = $_GET['tab'] ?? 'overview';
-if (!isset($tabs[$tab]))
-    $tab = 'overview';
+
+$tabs = ['overview' => 'Overview', 'inspections' => 'Inspections', 'certificates' => 'Certificates', 'disease' => 'Disease'];
+$tab = $_GET['tab'] ?? 'overview'; if (!isset($tabs[$tab])) $tab = 'overview';
 $modal = $_GET['modal'] ?? '';
 $residentOptions = $certificateOptions = $staffOptions = [];
 if (!empty($pdo)) {
@@ -36,11 +83,64 @@ if (!empty($pdo)) {
     $staffOptions = $pdo->query("SELECT s.id,CONCAT(u.first_name,' ',u.last_name) name FROM staff s JOIN users u ON u.id=s.user_id ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
+        if ($action === 'answer_consultation') {
+            $cslId = (int)($_POST['consultation_id'] ?? 0);
+            $resId = (int)($_POST['resident_id'] ?? 0);
+            $diagnosis = trim($_POST['diagnosis'] ?? '');
+            $notes = trim($_POST['consultation_notes'] ?? '');
+            $status = trim($_POST['consultation_status'] ?? 'Completed');
+
+            if ($cslId > 0 && !empty($pdo)) {
+                try {
+                    $stmt = $pdo->prepare("UPDATE consultations SET diagnosis = :dx, consultation_notes = :notes, consultation_status = :st WHERE id = :id");
+                    $stmt->execute([
+                        'dx' => $diagnosis,
+                        'notes' => $notes,
+                        'st' => $status,
+                        'id' => $cslId
+                    ]);
+                    if ($resId > 0) {
+                        portalNotifyResident($pdo, $resId, "Your Sanitary Inspection request response has been updated by Sanitary Inspector. Status: {$status}. Findings: {$diagnosis}", "ResidentDashboard.php?tab=appointments");
+                    }
+                    $_SESSION['sanitary_flash_success'] = 'Sanitation consultation updated and response sent to resident!';
+                } catch (Exception $e) {
+                    $_SESSION['sanitary_flash_error'] = 'Error updating consultation: ' . $e->getMessage();
+                }
+            }
+            header('Location: ?tab=overview'); exit;
+        }
         if ($action === 'save_sanitary_inspection') {
             $statement = $pdo->prepare("INSERT INTO sanitation_inspections (establishment,barangay,inspector_staff_id,inspection_date,next_inspection_date,status,compliance_rate,violations,findings) VALUES (?,?,?,?,?,?,?,?,?)");
             $statement->execute([trim($_POST['establishment']), trim($_POST['barangay']), (int) $_POST['inspector_staff_id'] ?: null, $_POST['inspection_date'], $_POST['next_inspection_date'] ?: null, $_POST['status'], (float) $_POST['compliance_rate'], (int) $_POST['violations'], trim($_POST['findings'])]);
             header('Location: ?tab=inspections');
             exit;
+        }
+        if ($action === 'issue_inspection_notice') {
+            $inspectionId = (int)($_POST['inspection_id'] ?? 0);
+            try {
+                $inspectionStmt = $pdo->prepare('SELECT id, establishment, violations, findings FROM sanitation_inspections WHERE id = :id LIMIT 1');
+                $inspectionStmt->execute(['id' => $inspectionId]);
+                $inspection = $inspectionStmt->fetch(PDO::FETCH_ASSOC);
+                if (!$inspection) throw new RuntimeException('Inspection record not found.');
+                if ((int)$inspection['violations'] <= 0) throw new RuntimeException('A notice requires at least one recorded violation.');
+                $existingStmt = $pdo->prepare("SELECT notice_number FROM sanitation_notices WHERE inspection_id = :id AND notice_status = 'Issued' LIMIT 1");
+                $existingStmt->execute(['id' => $inspectionId]);
+                $noticeNumber = $existingStmt->fetchColumn();
+                if (!$noticeNumber) {
+                    $noticeNumber = 'SN-' . date('Ymd') . '-' . str_pad((string)$inspectionId, 5, '0', STR_PAD_LEFT);
+                    $noticeStmt = $pdo->prepare("INSERT INTO sanitation_notices
+                        (inspection_id, notice_number, issued_by_staff_id, issued_date, violations, findings, notice_status)
+                        VALUES (:inspection, :number, :staff, CURDATE(), :violations, :findings, 'Issued')");
+                    $noticeStmt->execute(['inspection'=>$inspectionId, 'number'=>$noticeNumber,
+                        'staff'=>(int)($_SESSION['rhu_staff_login']['staff_id'] ?? 0) ?: null,
+                        'violations'=>(int)$inspection['violations'], 'findings'=>$inspection['findings']]);
+                    portalNotify($pdo, "Sanitation notice {$noticeNumber} issued to {$inspection['establishment']}.", null, 'ADMIN', 'RHUAdminDashboard.php?tab=sanitation');
+                }
+                $_SESSION['sanitary_flash_success'] = "Notice {$noticeNumber} has been issued.";
+            } catch (Throwable $noticeError) {
+                $_SESSION['sanitary_flash_error'] = 'Notice Error: ' . $noticeError->getMessage();
+            }
+            header('Location: ?tab=inspections'); exit;
         }
         if ($action === 'save_sanitary_certificate') {
             $statement = $pdo->prepare("INSERT INTO health_certificates (resident_id,certificate_type_id,certificate_number,issue_date,expiry_date,issued_by_id,purpose,validity_status) VALUES (?,?,?,?,?,?,?,'Valid')");
@@ -58,7 +158,7 @@ $inspections = $certs = $diseases = [];
 if (!empty($pdo)) {
     try {
         $sanStmt = $pdo->prepare("
-            SELECT c.id, CONCAT(r.first_name, ' ', r.last_name) AS patientName, TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) as age, r.gender, c.chief_complaint as chiefComplaint, r.barangay, c.consultation_date as date, c.consultation_notes
+            SELECT c.id, c.resident_id, CONCAT(r.first_name, ' ', r.last_name) AS patientName, TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) as age, r.gender, c.chief_complaint as chiefComplaint, c.diagnosis, r.barangay, c.consultation_date as date, c.consultation_notes, COALESCE(c.consultation_status, 'Scheduled') AS consultation_status
             FROM consultations c
             JOIN residents r ON c.resident_id = r.id
             LEFT JOIN staff doc_s ON c.physician_id = doc_s.id
@@ -70,11 +170,16 @@ if (!empty($pdo)) {
     } catch (Exception $e) {
     }
 
-    foreach ($pdo->query("SELECT * FROM sanitation_inspections ORDER BY inspection_date DESC, id DESC")->fetchAll(PDO::FETCH_ASSOC) as $row) {
+    $inspectionStmt = $pdo->query("SELECT si.*, CONCAT_WS(' ', u.first_name, u.last_name) AS inspector_name
+        FROM sanitation_inspections si
+        LEFT JOIN staff s ON s.id = si.inspector_staff_id
+        LEFT JOIN users u ON u.id = s.user_id
+        ORDER BY si.inspection_date DESC, si.id DESC");
+    foreach ($inspectionStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
         $rawStatus = strtolower($row['status']);
         $status = str_contains($rawStatus, 'compliant') && !str_contains($rawStatus, 'non') ? 'passed' : (str_contains($rawStatus, 'conditional') || str_contains($rawStatus, 'follow') ? 'conditional' : 'failed');
-        $findings = array_values(array_filter(array_map('trim', preg_split('/[\r\n;]+/', (string) $row['findings']))));
-        $inspections[] = ['SI' . $row['id'], $row['establishment'], 'Establishment', $row['barangay'], $row['inspection_date'], $row['next_inspection_date'] ?: 'Not scheduled', $status, (int) ($row['compliance_rate'] ?? 0), (int) $row['violations'], $findings];
+        $findings = array_values(array_filter(array_map('trim', preg_split('/[\r\n;]+/', (string)$row['findings']))));
+        $inspections[] = ['SI' . $row['id'], $row['establishment'], 'Establishment', $row['barangay'], $row['inspection_date'], $row['next_inspection_date'] ?: 'Not scheduled', $status, (int)($row['compliance_rate'] ?? 0), (int)$row['violations'], $findings, trim((string)($row['inspector_name'] ?? '')) ?: ($_SESSION['rhu_staff_login']['name'] ?? 'Sanitary Inspector')];
     }
     foreach ($pdo->query("SELECT hc.*, ct.certificate_type_name, CONCAT(r.first_name,' ',r.last_name) recipient FROM health_certificates hc JOIN certificate_types ct ON ct.id=hc.certificate_type_id JOIN residents r ON r.id=hc.resident_id ORDER BY hc.issue_date DESC, hc.id DESC")->fetchAll(PDO::FETCH_ASSOC) as $row) {
         $certs[] = [$row['certificate_number'] ?: 'HC-' . $row['id'], $row['certificate_type_name'], $row['recipient'], $row['purpose'] ?: 'Not recorded', $row['issue_date'], $row['expiry_date'] ?: 'Not recorded', null, strtolower($row['validity_status'] ?: 'issued')];
@@ -96,238 +201,18 @@ $avg = count($inspections) ? round(array_sum(array_column($inspections, 7)) / co
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sanitary Inspector Portal - ResiHUnity RHU</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-
-        :root {
-            --rhu-teal: #0f766e;
-            --rhu-aqua: #14b8a6;
-            --rhu-ink: #0f172a;
-        }
-
-        html {
-            scroll-behavior: smooth;
-        }
-
-        body {
-            font-family: 'Plus Jakarta Sans', sans-serif;
-            background: radial-gradient(circle at 4% 3%, rgba(20, 184, 166, .13), transparent 25rem),
-                radial-gradient(circle at 96% 12%, rgba(14, 165, 233, .10), transparent 28rem),
-                linear-gradient(155deg, #f8fffe 0%, #f8fafc 48%, #f5f9ff 100%);
-            color: var(--rhu-ink);
-        }
-
-        body::before {
-            content: '';
-            position: fixed;
-            inset: 0 0 auto;
-            z-index: 60;
-            height: 3px;
-            background: linear-gradient(90deg, #10b981, #14b8a6, #0ea5e9, #6366f1);
-            pointer-events: none;
-        }
-
-        #scroll-progress {
-            position: fixed;
-            inset: 0 auto auto 0;
-            z-index: 70;
-            width: 0;
-            height: 3px;
-            background: linear-gradient(90deg, #34d399, #22d3ee, #60a5fa);
-            box-shadow: 0 0 12px rgba(34, 211, 238, .65);
-            transition: width 80ms linear;
-        }
-
-        .ambient-orb {
-            position: fixed;
-            z-index: -1;
-            width: 20rem;
-            height: 20rem;
-            border-radius: 9999px;
-            filter: blur(80px);
-            opacity: .16;
-            pointer-events: none;
-            animation: orb-float 12s ease-in-out infinite alternate;
-        }
-
-        .ambient-orb-one {
-            left: 8%;
-            top: 16%;
-            background: #2dd4bf;
-        }
-
-        .ambient-orb-two {
-            right: 2%;
-            bottom: 6%;
-            background: #60a5fa;
-            animation-delay: -5s;
-        }
-
-        @keyframes orb-float {
-            from {
-                transform: translate3d(-1rem, -1rem, 0) scale(.92);
-            }
-
-            to {
-                transform: translate3d(2rem, 2rem, 0) scale(1.08);
-            }
-        }
-
-        .sidebar-expanded {
-            width: 16rem;
-        }
-
-        .sidebar-collapsed {
-            width: 4.5rem !important;
-        }
-
-        .sidebar-collapsed .sidebar-label,
-        .sidebar-collapsed .logo-title,
-        .sidebar-collapsed .logo-mark {
-            display: none !important;
-        }
-
-        .sidebar-collapsed .sidebar-item {
-            justify-content: center !important;
-            padding-left: 0 !important;
-            padding-right: 0 !important;
-            border-radius: 9999px;
-        }
-
-        .sidebar-collapsed .header-logo-container {
-            justify-content: center;
-            padding-left: .5rem;
-            padding-right: .5rem;
-        }
-
-        .sidebar-collapsed .header-logo-inner {
-            justify-content: center !important;
-            width: 100%;
-        }
-
-        #sidebar {
-            background: linear-gradient(180deg, rgba(255, 255, 255, .98), rgba(240, 253, 250, .96) 55%, rgba(239, 246, 255, .96));
-            border-color: rgba(153, 246, 228, .7);
-            box-shadow: 12px 0 35px rgba(15, 23, 42, .06);
-        }
-
-        #sidebar .sidebar-item:hover {
-            transform: translateX(3px);
-            background: linear-gradient(90deg, rgba(204, 251, 241, .8), rgba(224, 242, 254, .58));
-            color: var(--rhu-teal);
-        }
-
-        .nav-active {
-            background-color: #ccfbf1 !important;
-            color: #0f766e !important;
-            font-weight: 700 !important;
-        }
-
-        .nav-active span {
-            color: #0f766e !important;
-        }
-
-        header.sticky {
-            background: rgba(255, 255, 255, .86) !important;
-            border-color: rgba(153, 246, 228, .65) !important;
-            box-shadow: 0 8px 30px rgba(15, 118, 110, .055);
-            backdrop-filter: blur(18px);
-        }
-
-        .dashboard-card {
-            transition: transform 220ms cubic-bezier(.2, .8, .2, 1), box-shadow 220ms ease, border-color 220ms ease;
-        }
-
-        .dashboard-card:hover {
-            transform: translateY(-3px) scale(1.012);
-            border-color: rgba(45, 212, 191, .75);
-            box-shadow: 0 16px 35px rgba(15, 118, 110, .11);
-            position: relative;
-            z-index: 2;
-        }
-
-        button:not([disabled]),
-        a[href] {
-            transition: transform 180ms ease, box-shadow 180ms ease, background-color 180ms ease, color 180ms ease, border-color 180ms ease;
-        }
-
-        button:not([disabled]):active,
-        a[href]:active {
-            transform: scale(.97);
-        }
-
-        input:focus,
-        select:focus,
-        textarea:focus {
-            border-color: #14b8a6 !important;
-            box-shadow: 0 0 0 4px rgba(20, 184, 166, .12) !important;
-        }
-
-        .reveal-on-scroll {
-            opacity: 0;
-            transform: translateY(18px);
-        }
-
-        .reveal-on-scroll.is-visible {
-            opacity: 1;
-            transform: none;
-            transition: opacity 500ms ease, transform 500ms cubic-bezier(.2, .8, .2, 1);
-        }
-
-        * {
-            scrollbar-width: thin;
-            scrollbar-color: #99f6e4 transparent;
-        }
-
-        @media (prefers-reduced-motion:reduce) {
-            html {
-                scroll-behavior: auto;
-            }
-
-            .reveal-on-scroll,
-            .reveal-on-scroll.is-visible,
-            .ambient-orb {
-                animation: none;
-                transition: none;
-                transform: none;
-                opacity: 1;
-            }
-
-            .dashboard-card:hover {
-                transform: none;
-            }
-        }
-    </style>
-    <link rel="stylesheet" href="dashboard-enhancements.css">
-    <script defer src="dashboard-enhancements.js?v=20260726-controls3"></script>
+  <link rel="stylesheet" href="dashboard-enhancements.css?v=20260728-nurse-theme2">
+  <script defer src="dashboard-enhancements.js?v=20260726-controls3"></script>
 </head>
+<body class="nurse-palette-dashboard min-h-screen bg-gray-50 text-gray-900">
 
-<body
-    class="min-h-screen text-slate-800 antialiased flex flex-col sm:flex-row selection:bg-teal-500 selection:text-white">
-    <div id="scroll-progress" aria-hidden="true"></div>
-    <div class="ambient-orb ambient-orb-one" aria-hidden="true"></div>
-    <div class="ambient-orb ambient-orb-two" aria-hidden="true"></div>
-
-    <aside id="sidebar"
-        class="sidebar-expanded text-slate-700 transition-all duration-300 ease-in-out flex-shrink-0 sticky top-0 h-auto sm:h-screen z-40 flex flex-col justify-between border-r">
-        <div>
-            <div class="h-16 px-3 flex items-center border-b border-teal-100/60 header-logo-container">
-                <div class="flex items-center gap-2.5 overflow-hidden w-full header-logo-inner">
-                    <button type="button" onclick="toggleSidebar()"
-                        class="p-2 rounded-full text-slate-600 hover:bg-teal-50 transition-colors shrink-0"
-                        title="Toggle Menu"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M4 6h16M4 12h16M4 18h16" />
-                        </svg></button>
-                    <div class="logo-title flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
-                        <img src="resihunity_logo.jpg" alt=""
-                            class="logo-mark h-9 w-9 object-contain object-left shrink-0 rounded-md" />
-                        <div class="min-w-0 leading-tight">
-                            <h1 class="text-sm font-extrabold text-slate-800 tracking-tight truncate">ResiHUnity</h1>
-                            <p class="text-[9px] font-medium text-slate-400 truncate hidden lg:block">RHU Sanitary
-                                Portal</p>
-                        </div>
-                    </div>
+<header class="sticky top-0 z-40 bg-gradient-to-r from-emerald-800 via-teal-800 to-cyan-900 text-white shadow-xl border-b border-emerald-700/40">
+        <div class="flex items-center justify-between px-4 py-3 sm:px-6">
+            <div class="flex items-center gap-3">
+                <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-white/20 text-xl">♢</span>
+                <div>
+                    <h1 class="text-base font-bold">Sanitary Inspector Portal</h1>
+                    <p class="text-xs text-teal-200">Nasugbu Rural Health Unit I</p>
                 </div>
             </div>
             <nav class="py-3 pr-3 space-y-1 overflow-y-auto max-h-[calc(100vh-8rem)]">
@@ -355,15 +240,12 @@ $avg = count($inspections) ? round(array_sum(array_column($inspections, 7)) / co
         </div>
     </aside>
 
-    <div class="flex-1 flex flex-col min-w-0 min-h-screen">
-        <header class="sticky top-0 z-30 px-4 sm:px-8 py-3.5 flex items-center justify-between gap-4 border-b">
-            <div class="flex items-center gap-3">
-                <button onclick="toggleSidebar()"
-                    class="sm:hidden p-2 rounded-full text-slate-600 hover:bg-teal-50"><svg class="w-6 h-6" fill="none"
-                        stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round"
-                        stroke-linejoin="round">
-                        <path d="M4 6h16M4 12h16M4 18h16" />
-                    </svg></button>
+    <main class="mx-auto max-w-5xl space-y-4 px-3 py-4 pb-20 sm:px-4 sm:py-6">
+        <?php if ($sanitaryFlashSuccess): ?><div class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-bold text-emerald-800"><?= e($sanitaryFlashSuccess) ?></div><?php endif; ?>
+        <?php if ($sanitaryFlashError): ?><div class="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-800"><?= e($sanitaryFlashError) ?></div><?php endif; ?>
+        <?php if($tab==='overview'): ?>
+            <section class="flex gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+                <span class="text-red-600">⚠</span>
                 <div>
                     <h1 class="text-base sm:text-lg font-bold text-slate-800 tracking-tight"><?= e($tabs[$tab][0]); ?>
                     </h1>
@@ -390,36 +272,72 @@ $avg = count($inspections) ? round(array_sum(array_column($inspections, 7)) / co
             </div>
         </header>
 
-        <main class="max-w-7xl w-full mx-auto p-4 sm:p-8 space-y-6 pb-28 sm:pb-12 flex-1">
-
-            <?php if ($tab === 'overview'): ?>
-                <div class="space-y-6">
-                    <?php if ($failed > 0): ?>
-                        <div
-                            class="relative overflow-hidden rounded-2xl bg-gradient-to-r from-rose-600 to-red-700 p-5 sm:p-6 text-white shadow-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                            <div class="flex items-start gap-4 relative z-10">
-                                <span
-                                    class="w-11 h-11 rounded-2xl bg-white/20 flex items-center justify-center shrink-0 border border-white/30 text-white"><svg
-                                        class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"
-                                        stroke-linecap="round" stroke-linejoin="round">
-                                        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-                                        <path d="M12 9v4" />
-                                        <path d="M12 17h.01" />
-                                    </svg></span>
-                                <div>
-                                    <p class="font-extrabold text-base sm:text-lg tracking-tight"><?= $failed ?>
-                                        establishment(s) failed inspection</p>
-                                    <p class="text-xs sm:text-sm text-rose-100 mt-1.5 font-medium">
-                                        <?php foreach ($inspections as $i)
-                                            if ($i[6] === 'failed')
-                                                echo e($i[1]) . ' '; ?>
-                                    </p>
+            <section class="rounded-xl border border-teal-200 bg-white p-5 shadow-sm space-y-3">
+                <div class="flex justify-between items-center border-b border-teal-100 pb-2">
+                    <h2 class="font-bold text-sm text-teal-950 flex items-center gap-2">
+                        ♢ Received Sanitary Inspection & Clearance Requests (<?= count($sanitaryConsultations) ?>)
+                    </h2>
+                    <span class="text-[10px] font-bold bg-teal-50 text-teal-700 px-2 py-0.5 rounded-full border border-teal-200">Live Queue</span>
+                </div>
+                <?php if (empty($sanitaryConsultations)): ?>
+                    <p class="text-xs text-gray-400 italic py-2 text-center">No sanitary inspection requests assigned to you yet.</p>
+                <?php else: ?>
+                    <div class="divide-y divide-gray-100 max-h-64 overflow-y-auto">
+                        <?php foreach ($sanitaryConsultations as $sc): ?>
+                            <div class="py-3 flex flex-col space-y-2 bg-slate-50/50 p-3 rounded-xl border border-teal-100 my-1">
+                                <div class="flex items-center justify-between text-xs gap-2">
+                                    <div>
+                                        <p class="font-bold text-gray-900"><?= e($sc['patientName']) ?> <span class="text-gray-500 font-normal">(<?= e($sc['age'] ?? 'N/A') ?>y • <?= e($sc['gender'] ?? 'N/A') ?> • <?= e($sc['barangay']) ?>)</span></p>
+                                        <p class="text-teal-700 font-medium"><?= e($sc['chiefComplaint']) ?></p>
+                                        <p class="text-[10px] text-gray-400 font-mono">📅 Requested Date: <?= e($sc['date']) ?></p>
+                                    </div>
+                                    <span class="px-2 py-1 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg font-bold text-[10px] shrink-0">Status: <?= e($sc['consultation_status']) ?></span>
                                 </div>
+
+                                <!-- SANITARY INSPECTOR RESPONSE / UPDATE FORM -->
+                                <details class="group border-t border-teal-100 pt-2" open>
+                                    <summary class="cursor-pointer text-xs font-bold text-teal-700 hover:text-teal-900 flex items-center justify-between py-1">
+                                        <span>💬 Answer / Update Sanitary Response for Resident</span>
+                                    </summary>
+                                    <form method="post" class="mt-2 bg-white p-3 rounded-xl border border-teal-200/70 space-y-2.5">
+                                        <input type="hidden" name="action" value="answer_consultation">
+                                        <input type="hidden" name="consultation_id" value="<?= (int)$sc['id']; ?>">
+                                        <input type="hidden" name="resident_id" value="<?= (int)($sc['resident_id'] ?? 0); ?>">
+                                        
+                                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                            <div>
+                                                <label class="block text-[11px] font-bold text-gray-700 mb-0.5">Inspection Assessment / Findings</label>
+                                                <input type="text" name="diagnosis" value="<?= e($sc['diagnosis'] ?? ''); ?>" placeholder="e.g. Sanitary Clearance Approved / Compliant" class="w-full p-2 border border-gray-300 rounded-lg text-xs outline-none focus:border-teal-500 bg-white" required>
+                                            </div>
+                                            <div>
+                                                <label class="block text-[11px] font-bold text-gray-700 mb-0.5">Status</label>
+                                                <select name="consultation_status" class="w-full p-2 border border-gray-300 rounded-lg text-xs outline-none focus:border-teal-500 bg-white font-bold text-teal-900">
+                                                    <option value="Completed" <?= ($sc['consultation_status'] ?? '') === 'Completed' ? 'selected' : ''; ?>>Completed</option>
+                                                    <option value="In Progress" <?= ($sc['consultation_status'] ?? '') === 'In Progress' ? 'selected' : ''; ?>>In Progress</option>
+                                                    <option value="Scheduled" <?= ($sc['consultation_status'] ?? '') === 'Scheduled' ? 'selected' : ''; ?>>Scheduled</option>
+                                                    <option value="Referred" <?= ($sc['consultation_status'] ?? '') === 'Referred' ? 'selected' : ''; ?>>Referred</option>
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <label class="block text-[11px] font-bold text-gray-700 mb-0.5">Inspector Notes &amp; Recommendations for Resident</label>
+                                            <textarea name="consultation_notes" rows="2" placeholder="Enter sanitary inspection notes, permit requirements, or advice..." class="w-full p-2 border border-gray-300 rounded-lg text-xs outline-none focus:border-teal-500 bg-white resize-none"><?= e($sc['consultation_notes'] ?? ''); ?></textarea>
+                                        </div>
+
+                                        <div class="flex justify-end pt-1">
+                                            <button type="submit" class="px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white text-xs font-extrabold rounded-lg shadow-sm transition-all flex items-center gap-1">
+                                                <span>✓</span> Save Response &amp; Notify Resident
+                                            </button>
+                                        </div>
+                                    </form>
+                                </details>
                             </div>
                             <a href="?tab=inspections"
                                 class="relative z-10 text-xs bg-white hover:bg-rose-50 text-red-700 font-bold px-4 py-2.5 rounded-xl shadow-md shrink-0">Review</a>
                         </div>
                     <?php endif; ?>
+                    </div>
 
                     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
                         <div class="dashboard-card bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
@@ -899,8 +817,117 @@ $avg = count($inspections) ? round(array_sum(array_column($inspections, 7)) / co
                 </div>
             <?php endif; ?>
 
-        </main>
-    </div>
+        <?php elseif($tab==='inspections'): ?>
+            <div class="flex justify-between">
+                <h2 class="text-xl font-bold">▣ Sanitation & Environmental Health Inspections</h2>
+                <a href="?tab=inspections&modal=inspection" class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white">＋ New Inspection</a>
+            </div>
+            <?php if($modal==='inspection'): ?><form method="post" class="grid gap-2 rounded-xl border bg-white p-4 text-sm sm:grid-cols-3"><input type="hidden" name="action" value="save_sanitary_inspection"><input required name="establishment" placeholder="Establishment" class="rounded border p-2"><input required name="barangay" placeholder="Barangay" class="rounded border p-2"><select name="inspector_staff_id" class="rounded border p-2"><option value="">Inspector</option><?php foreach($staffOptions as $o): ?><option value="<?= (int)$o['id'] ?>"><?= e($o['name']) ?></option><?php endforeach; ?></select><input required type="date" name="inspection_date" value="<?= date('Y-m-d') ?>" class="rounded border p-2"><input type="date" name="next_inspection_date" class="rounded border p-2"><select name="status" class="rounded border p-2"><option>Compliant</option><option>Conditional</option><option>Non-compliant</option></select><input required type="number" min="0" max="100" name="compliance_rate" placeholder="Compliance %" class="rounded border p-2"><input required type="number" min="0" name="violations" placeholder="Violations" class="rounded border p-2"><textarea name="findings" placeholder="Findings" class="rounded border p-2"></textarea><button class="rounded bg-teal-600 p-2 font-bold text-white">Save Inspection</button></form><?php endif; ?>
+            
+            <div class="space-y-3">
+                <?php foreach($inspections as $i): $color=$i[6]==='passed'?'green':($i[6]==='conditional'?'yellow':'red'); ?>
+                    <article class="rounded-xl border-l-4 border-<?= $color ?>-400 bg-white p-5 shadow-sm">
+                        <div class="flex flex-wrap justify-between gap-2">
+                            <div>
+                                <b><?= e($i[1]) ?></b>
+                                <p class="text-xs text-gray-500"><?= e($i[2]) ?> · <?= e($i[3]) ?> · Inspector: <?= e($i[10]) ?></p>
+                                <p class="text-xs text-gray-400">Inspected: <?= $i[4] ?> · Next: <?= $i[5] ?></p>
+                            </div>
+                            <div class="text-right">
+                                <span class="rounded-full bg-<?= $color ?>-100 px-2 py-1 text-xs font-bold text-<?= $color ?>-700"><?= strtoupper($i[6]) ?></span>
+                                <b class="mt-1 block text-lg text-<?= $color ?>-600"><?= $i[7] ?>%</b>
+                                <small class="text-gray-400">compliance</small>
+                            </div>
+                        </div>
+                        <div class="mt-3 h-2 rounded-full bg-gray-100">
+                            <i class="block h-2 rounded-full bg-<?= $color ?>-500" style="width:<?= $i[7] ?>%"></i>
+                        </div>
+                        <p class="mt-3 text-xs font-bold text-gray-500">Findings (<?= $i[8] ?> violation<?= $i[8]===1?'':'s' ?>)</p>
+                        <?php foreach($i[9] as $finding): ?>
+                            <p class="mt-1 text-xs text-gray-600">• <?= e($finding) ?></p>
+                        <?php endforeach; ?>
+                        <div class="mt-3">
+                            <form method="post" class="inline" onsubmit="return confirm('Issue a formal sanitation notice for this inspection?')">
+                                <input type="hidden" name="action" value="issue_inspection_notice">
+                                <input type="hidden" name="inspection_id" value="<?= (int)substr($i[0], 2) ?>">
+                                <button type="submit" class="rounded-lg bg-teal-600 px-3 py-1.5 text-xs text-white hover:bg-teal-700">Issue Notice</button>
+                            </form>
+                            <a href="?print_inspection=<?= (int)substr($i[0], 2) ?>" target="_blank" rel="noopener" class="ml-2 inline-block rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50">Print Report</a>
+                        </div>
+                    </article>
+                <?php endforeach; ?>
+            </div>
+
+        <?php elseif($tab==='certificates'): ?>
+            <div class="flex justify-between">
+                <h2 class="text-xl font-bold">▤ Health Certificates</h2>
+                <a href="?tab=certificates&modal=certificate" class="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white">＋ Issue Certificate</a>
+            </div>
+            <?php if($modal==='certificate'): ?><form method="post" class="grid gap-2 rounded-xl border bg-white p-4 text-sm sm:grid-cols-3"><input type="hidden" name="action" value="save_sanitary_certificate"><select required name="resident_id" class="rounded border p-2"><option value="">Resident</option><?php foreach($residentOptions as $o): ?><option value="<?= (int)$o['id'] ?>"><?= e($o['name']) ?></option><?php endforeach; ?></select><select required name="certificate_type_id" class="rounded border p-2"><?php foreach($certificateOptions as $o): ?><option value="<?= (int)$o['id'] ?>"><?= e($o['name']) ?></option><?php endforeach; ?></select><input required name="certificate_number" value="HC-<?= date('Ymd-His') ?>" class="rounded border p-2"><input required type="date" name="issue_date" value="<?= date('Y-m-d') ?>" class="rounded border p-2"><input type="date" name="expiry_date" class="rounded border p-2"><select name="issued_by_id" class="rounded border p-2"><option value="">Issuer</option><?php foreach($staffOptions as $o): ?><option value="<?= (int)$o['id'] ?>"><?= e($o['name']) ?></option><?php endforeach; ?></select><input required name="purpose" placeholder="Purpose" class="rounded border p-2"><button class="rounded bg-green-600 p-2 font-bold text-white">Save Certificate</button></form><?php endif; ?>
+            
+            <div class="overflow-x-auto rounded-xl border border-gray-100 bg-white shadow-sm">
+                <table class="w-full min-w-[700px] text-sm">
+                    <thead class="bg-gray-50 text-left text-xs uppercase text-gray-500">
+                        <tr>
+                            <th class="p-3">Cert No.</th>
+                            <th>Type</th>
+                            <th>Recipient</th>
+                            <th>Purpose</th>
+                            <th>Issued</th>
+                            <th>Valid Until</th>
+                            <th>Fee</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y">
+                        <?php foreach($certs as $c): ?>
+                            <tr>
+                                <td class="p-3 font-mono text-xs"><?= $c[0] ?></td>
+                                <td><?= e($c[1]) ?></td>
+                                <td class="font-semibold"><?= e($c[2]) ?></td>
+                                <td><?= e($c[3]) ?></td>
+                                <td><?= $c[4] ?></td>
+                                <td><?= $c[5] ?></td>
+                                <td><?= $c[6]?'₱'.$c[6]:'FREE' ?></td>
+                                <td>
+                                    <span class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700"><?= $c[7] ?></span>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+
+        <?php else: ?>
+            <h2 class="text-xl font-bold">♢ Disease Surveillance — Environmental Focus</h2>
+            <div class="space-y-3">
+                <?php foreach($diseases as $d): ?>
+                    <article class="rounded-xl border <?= $d[6]?'border-red-200 bg-red-50/30':'border-gray-100 bg-white' ?> p-4 shadow-sm">
+                        <div class="flex justify-between">
+                            <div>
+                                <b><?= e($d[1]) ?> <?= $d[6]?'<small class="text-red-500">⚠ ALERT</small>':'' ?></b>
+                                <p class="text-xs text-gray-500">ICD-10: <?= $d[2] ?> · <?= $d[3] ?> · Barangays: <?= implode(', ',$d[4]) ?></p>
+                                <p class="mt-1 text-xs font-semibold">Action: <?= e($d[7]) ?></p>
+                            </div>
+                            <div class="text-right">
+                                <b class="text-2xl <?= $d[5]>3?'text-red-600':'text-gray-900' ?>"><?= $d[5] ?></b>
+                                <small class="block text-gray-400">cases</small>
+                            </div>
+                        </div>
+                        <p class="mt-2 text-xs text-gray-500">
+                            Age groups: <?php foreach($d[8] as $age=>$count) echo "$age: $count "; ?>
+                        </p>
+                    </article>
+                <?php endforeach; ?>
+            </div>
+        <?php endif; ?>
+    </main>
+
+    <nav class="fixed bottom-0 left-0 right-0 z-50 flex border-t bg-white sm:hidden">
+        <?php foreach($tabs as $id=>$label): ?>
+            <a href="?tab=<?= $id ?>" class="flex flex-1 justify-center py-2 text-[10px] font-semibold <?= $tab===$id?'text-teal-600':'text-gray-400' ?>"><?= $label ?></a>
+        <?php endforeach; ?>
+    </nav>
 
     <script>
         function toggleSidebar() {

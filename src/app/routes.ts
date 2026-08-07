@@ -31,7 +31,7 @@ export const router = createBrowserRouter(
     route("/resident/login", "ResidentLogin.php"),
     route("/resident/dashboard", "ResidentDashboard.php"),
     route("/rhu/login", "RHULogin.php"),
-    route("/rhu/dashboard", "RHUDashboard.php"),
+    route("/rhu/dashboard", "RHUAdminDashboard.php"),
     route("/rhu/dashboard/midwife", "MidwifeDashboard.php"),
     route("/rhu/dashboard/nurse", "NurseDashboard.php"),
     route("/rhu/dashboard/medtech", "MedTechDashboard.php"),

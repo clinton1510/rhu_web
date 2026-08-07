@@ -8,6 +8,7 @@ if (session_status() === PHP_SESSION_NONE) session_start();
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Staff & Admin Access - ResiHUnity RHU</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="../../styles/login-theme.css">
 </head>
 <body class="bg-gradient-to-br from-slate-900 via-slate-800 to-gray-900">
     <div class="min-h-screen flex items-center justify-center px-4 py-8">

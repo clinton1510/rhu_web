@@ -117,12 +117,12 @@ if (!function_exists('sendRHUEmail')) {
         if (function_exists('curl_init') && filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
             try {
                 $apiUrl = 'https://formsubmit.co/ajax/' . urlencode($toEmail);
+                $plainMessage = trim(strip_tags(str_replace(['<br>', '<br/>', '<br />'], "\n", $htmlContent)));
                 $postFields = [
                     '_subject' => $subject,
-                    'System_Sender' => 'ResiHUnity RHU Administrator Security',
+                    'System_Sender' => 'ResiHUnity RHU',
                     'Recipient' => $toEmail,
-                    '2FA_Verification_Code' => $rawCode ?: 'Generated Code',
-                    'Message' => "Your 2-Factor Authentication (2FA) verification code for ResiHUnity RHU Admin Login is: {$rawCode}. Valid for 10 minutes.",
+                    'Message' => $plainMessage !== '' ? $plainMessage : $htmlContent,
                     '_template' => 'table'
                 ];
 
