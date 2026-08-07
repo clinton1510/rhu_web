@@ -265,6 +265,8 @@ CREATE TABLE IF NOT EXISTS blood_matches (
 CREATE TABLE IF NOT EXISTS pregnancies (
     id SERIAL PRIMARY KEY,
     resident_id INT NOT NULL REFERENCES residents(id) ON DELETE CASCADE,
+    gravida INT UNSIGNED NOT NULL DEFAULT 1,
+    para INT UNSIGNED NOT NULL DEFAULT 0,
     last_menstrual_period DATE,
     expected_delivery_date DATE,
     pregnancy_status VARCHAR(50), -- Active, Delivered, Miscarriage, Terminated
@@ -309,6 +311,39 @@ CREATE TABLE IF NOT EXISTS deliveries (
     delivery_location VARCHAR(100),
     notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS family_planning_records (
+    id SERIAL PRIMARY KEY,
+    resident_id INT NOT NULL REFERENCES residents(id) ON DELETE CASCADE,
+    contraceptive_method VARCHAR(100) NOT NULL,
+    acceptor_type VARCHAR(50) NOT NULL DEFAULT 'New Acceptor',
+    last_supply_date DATE NOT NULL,
+    next_visit_date DATE,
+    status VARCHAR(30) NOT NULL DEFAULT 'Active',
+    clinical_notes TEXT,
+    healthcare_provider_id INT REFERENCES staff(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_fp_resident (resident_id),
+    INDEX idx_fp_next_visit (next_visit_date)
+);
+
+CREATE TABLE IF NOT EXISTS maternal_referrals (
+    id SERIAL PRIMARY KEY,
+    resident_id INT NOT NULL REFERENCES residents(id) ON DELETE CASCADE,
+    pregnancy_id INT REFERENCES pregnancies(id) ON DELETE SET NULL,
+    diagnosis VARCHAR(255) NOT NULL,
+    referred_to VARCHAR(255) NOT NULL,
+    referral_reason TEXT NOT NULL,
+    urgency VARCHAR(30) NOT NULL DEFAULT 'Routine',
+    referral_status VARCHAR(30) NOT NULL DEFAULT 'Pending',
+    referred_by_id INT REFERENCES staff(id),
+    referral_date DATE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_referral_resident (resident_id),
+    INDEX idx_referral_status (referral_status)
 );
 
 -- ============================================

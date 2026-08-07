@@ -6,6 +6,8 @@ if (empty($_SESSION['rhu_staff_login']) || ($stType !== 'NURSE' && !str_contains
     exit;
 }
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/portal.php';
+portalHandleNotificationApi($pdo);
 
 function esc(mixed $v): string {
     return htmlspecialchars((string) ($v ?? ''), ENT_QUOTES, 'UTF-8');
@@ -34,6 +36,7 @@ $tabs = [
     'tb' => ['TB-DOTS', '🔬'],
     'disease' => ['Disease Surveillance', '⚠'],
     'bhw' => ['BHW Management', '👤'],
+    'certificates' => ['Certificates', '🏅'],
 ];
 
 $tab = $_GET['tab'] ?? 'overview';
@@ -50,6 +53,47 @@ unset($_SESSION['nurse_flash_success'], $_SESSION['nurse_flash_error']);
 // ----------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
     $action = $_POST['action'] ?? '';
+
+    if ($action === 'issue_certificate') {
+        try {
+            $issued = portalIssueResidentCertificate($pdo, $_POST, (int)($_SESSION['rhu_staff_login']['staff_id'] ?? 0), 'Public Health Nurse');
+            $_SESSION['nurse_flash_success'] = "{$issued['type']} {$issued['number']} was issued and sent to the Resident.";
+        } catch (Throwable $e) {
+            $_SESSION['nurse_flash_error'] = 'Certificate Error: ' . $e->getMessage();
+        }
+        header('Location: ' . tabUrl('certificates')); exit;
+    }
+
+    // Action: Answer / Update Resident Consultation
+    if ($action === 'answer_consultation') {
+        $cslId = (int)($_POST['consultation_id'] ?? 0);
+        $resId = (int)($_POST['resident_id'] ?? 0);
+        $diagnosis = trim($_POST['diagnosis'] ?? '');
+        $notes = trim($_POST['consultation_notes'] ?? '');
+        $meds = trim($_POST['medications_prescribed'] ?? '');
+        $status = trim($_POST['consultation_status'] ?? 'Completed');
+
+        if ($cslId > 0 && !empty($pdo)) {
+            try {
+                $stmt = $pdo->prepare("UPDATE consultations SET diagnosis = :dx, consultation_notes = :notes, medications_prescribed = :meds, consultation_status = :st WHERE id = :id");
+                $stmt->execute([
+                    'dx' => $diagnosis,
+                    'notes' => $notes,
+                    'meds' => $meds,
+                    'st' => $status,
+                    'id' => $cslId
+                ]);
+                if ($resId > 0) {
+                    portalNotifyResident($pdo, $resId, "Your OPD Triage / Consultation request has been updated by the Nurse. Status: {$status}. Assessment: {$diagnosis}", "ResidentDashboard.php?tab=appointments");
+                }
+                $_SESSION['nurse_flash_success'] = 'Consultation updated and response sent to resident successfully!';
+            } catch (Exception $e) {
+                $_SESSION['nurse_flash_error'] = 'Error updating consultation: ' . $e->getMessage();
+            }
+        }
+        header('Location: ' . tabUrl('overview'));
+        exit;
+    }
 
     // Action: Save New OPD Triage & Vitals
     if ($action === 'save_triage') {
@@ -80,6 +124,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
                     'meds' => $meds,
                     'notes' => $notes
                 ]);
+                portalNotifyResident($pdo, $residentId, "Your OPD Triage & Vital Signs (BP: {$bp}, Temp: {$temp}) were recorded by Public Health Nurse.", "ResidentDashboard.php?tab=history");
+                portalNotify($pdo, "New OPD Triage recorded for resident patient", null, 'PHYSICIAN', "RHUAdminDashboard.php");
                 $_SESSION['nurse_flash_success'] = 'New OPD Triage record and vital signs saved successfully into database!';
             } catch (Exception $e) {
                 $_SESSION['nurse_flash_error'] = 'Database Error: ' . $e->getMessage();
@@ -197,6 +243,7 @@ $diseaseReports = [];
 $bhwList = [];
 
 $allResidentsList = [];
+$nurseCertificateTypes = [];
 $allStaffList = [];
 $selectedResidentData = null;
 
@@ -204,6 +251,7 @@ if (!empty($pdo)) {
     try {
         // Dropdown option queries
         $allResidentsList = $pdo->query("SELECT id, CONCAT(first_name, ' ', last_name) as name, barangay FROM residents ORDER BY first_name ASC")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $nurseCertificateTypes = portalEnsureCertificateTypes($pdo, ['Nursing Health Assessment Certificate','Immunization Status Certificate','Vital Signs Assessment Certificate','Community Health Clearance']);
         $allStaffList = $pdo->query("SELECT s.id, CONCAT(u.first_name, ' ', u.last_name) as name, s.staff_type FROM staff s JOIN users u ON s.user_id = u.id ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
         // 1. OPD Consultations (Filtered by logged-in staff/nurse)
@@ -212,7 +260,7 @@ if (!empty($pdo)) {
 
         if ($nurseStaffId > 0) {
             $opdStmt = $pdo->prepare("
-                SELECT c.id, CONCAT(r.first_name, ' ', r.last_name) AS patientName, TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) as age, r.gender, c.chief_complaint as chiefComplaint, c.diagnosis, c.icd_code as icd10, c.medications_prescribed as medications, r.barangay, c.consultation_date as date, c.referral_needed, c.referral_to, c.consultation_notes
+                SELECT c.id, c.resident_id, CONCAT(r.first_name, ' ', r.last_name) AS patientName, TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) as age, r.gender, c.chief_complaint as chiefComplaint, c.diagnosis, c.icd_code as icd10, c.medications_prescribed as medications, r.barangay, c.consultation_date as date, c.referral_needed, c.referral_to, c.consultation_notes, COALESCE(c.consultation_status, 'Scheduled') AS consultation_status
                 FROM consultations c
                 JOIN residents r ON c.resident_id = r.id
                 LEFT JOIN staff doc_s ON c.physician_id = doc_s.id
@@ -222,7 +270,7 @@ if (!empty($pdo)) {
             $opdStmt->execute(['sid' => $nurseStaffId, 'uid' => $nurseUserId]);
         } else {
             $opdStmt = $pdo->query("
-                SELECT c.id, CONCAT(r.first_name, ' ', r.last_name) AS patientName, TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) as age, r.gender, c.chief_complaint as chiefComplaint, c.diagnosis, c.icd_code as icd10, c.medications_prescribed as medications, r.barangay, c.consultation_date as date, c.referral_needed, c.referral_to, c.consultation_notes
+                SELECT c.id, c.resident_id, CONCAT(r.first_name, ' ', r.last_name) AS patientName, TIMESTAMPDIFF(YEAR, r.date_of_birth, CURDATE()) as age, r.gender, c.chief_complaint as chiefComplaint, c.diagnosis, c.icd_code as icd10, c.medications_prescribed as medications, r.barangay, c.consultation_date as date, c.referral_needed, c.referral_to, c.consultation_notes, COALESCE(c.consultation_status, 'Scheduled') AS consultation_status
                 FROM consultations c
                 JOIN residents r ON c.resident_id = r.id
                 ORDER BY c.id DESC
@@ -322,11 +370,11 @@ $todayOPDCount = count($opdConsultations);
         body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         .safe-area-pb { padding-bottom: env(safe-area-inset-bottom); }
     </style>
-    <link rel="stylesheet" href="dashboard-enhancements.css">
+  <link rel="stylesheet" href="dashboard-enhancements.css?v=20260728-nurse-theme2">
     <script defer src="dashboard-enhancements.js?v=20260726-controls3"></script>
 </head>
 
-<body class="min-h-screen bg-slate-50 text-slate-900 selection:bg-emerald-500 selection:text-white">
+<body class="nurse-palette-dashboard min-h-screen bg-slate-50 text-slate-900 selection:bg-emerald-500 selection:text-white">
     <div class="min-h-screen flex flex-col">
 
         <!-- HEADER -->
@@ -352,6 +400,7 @@ $todayOPDCount = count($opdConsultations);
                     <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-300/30 text-xs font-bold text-emerald-200">
                         <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> Live Database Sync
                     </span>
+                    <?= portalRenderNotificationButton(); ?>
                     <a href="StaffLogout.php" data-staff-logout class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-red-500/30 text-xs font-bold text-white transition-all border border-white/20 hover:border-red-400/40" title="Log Out">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
                         <span>Log out</span>
@@ -502,6 +551,51 @@ $todayOPDCount = count($opdConsultations);
                                         <div class="text-xs text-gray-600 font-mono bg-white p-2.5 rounded-xl border border-gray-200/60">
                                             <?= esc($c['consultation_notes']); ?>
                                         </div>
+
+                                        <!-- NURSE RESPONSE / UPDATE FORM -->
+                                        <details class="group border-t border-emerald-100 pt-2" open>
+                                            <summary class="cursor-pointer text-xs font-bold text-emerald-700 hover:text-emerald-900 flex items-center justify-between py-1">
+                                                <span>💬 Answer / Update Consultation Response for Resident</span>
+                                                <span class="text-[10px] bg-emerald-100 text-emerald-800 font-extrabold px-2 py-0.5 rounded-md">Status: <?= esc($c['consultation_status']); ?></span>
+                                            </summary>
+                                            <form method="post" class="mt-2 bg-emerald-50/50 p-3 rounded-xl border border-emerald-200/70 space-y-2.5">
+                                                <input type="hidden" name="action" value="answer_consultation">
+                                                <input type="hidden" name="consultation_id" value="<?= (int)$c['id']; ?>">
+                                                <input type="hidden" name="resident_id" value="<?= (int)($c['resident_id'] ?? 0); ?>">
+                                                
+                                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                    <div>
+                                                        <label class="block text-[11px] font-bold text-gray-700 mb-0.5">Clinical Diagnosis / Nursing Assessment</label>
+                                                        <input type="text" name="diagnosis" value="<?= esc($c['diagnosis'] ?? ''); ?>" placeholder="e.g. Acute Upper Respiratory Tract Infection" class="w-full p-2 border border-gray-300 rounded-lg text-xs outline-none focus:border-emerald-500 bg-white" required>
+                                                    </div>
+                                                    <div>
+                                                        <label class="block text-[11px] font-bold text-gray-700 mb-0.5">Consultation Status</label>
+                                                        <select name="consultation_status" class="w-full p-2 border border-gray-300 rounded-lg text-xs outline-none focus:border-emerald-500 bg-white font-bold text-emerald-900">
+                                                            <option value="Completed" <?= ($c['consultation_status'] ?? '') === 'Completed' ? 'selected' : ''; ?>>Completed</option>
+                                                            <option value="In Progress" <?= ($c['consultation_status'] ?? '') === 'In Progress' ? 'selected' : ''; ?>>In Progress</option>
+                                                            <option value="Scheduled" <?= ($c['consultation_status'] ?? '') === 'Scheduled' ? 'selected' : ''; ?>>Scheduled</option>
+                                                            <option value="Referred" <?= ($c['consultation_status'] ?? '') === 'Referred' ? 'selected' : ''; ?>>Referred to Doctor</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+
+                                                <div>
+                                                    <label class="block text-[11px] font-bold text-gray-700 mb-0.5">Nurse Notes &amp; Recommendations for Resident</label>
+                                                    <textarea name="consultation_notes" rows="2" placeholder="Enter nursing triage advice, vital signs notes, and instructions..." class="w-full p-2 border border-gray-300 rounded-lg text-xs outline-none focus:border-emerald-500 bg-white resize-none"><?= esc($c['consultation_notes'] ?? ''); ?></textarea>
+                                                </div>
+
+                                                <div>
+                                                    <label class="block text-[11px] font-bold text-gray-700 mb-0.5">Medications Prescribed / Given</label>
+                                                    <input type="text" name="medications_prescribed" value="<?= esc($c['medications'] ?? ''); ?>" placeholder="e.g. Paracetamol 500mg 1 tab q8h prn" class="w-full p-2 border border-gray-300 rounded-lg text-xs outline-none focus:border-emerald-500 bg-white">
+                                                </div>
+
+                                                <div class="flex justify-end pt-1">
+                                                    <button type="submit" class="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-extrabold rounded-lg shadow-sm transition-all flex items-center gap-1">
+                                                        <span>✓</span> Save Response &amp; Notify Resident
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </details>
                                     </div>
                                 <?php endforeach; ?>
                             </div>
@@ -803,6 +897,9 @@ $todayOPDCount = count($opdConsultations);
                     <?php endif; ?>
                 </div>
             <?php endif; ?>
+            <?php if ($tab === 'certificates'): ?>
+                <?= portalRenderCertificateIssuancePanel($pdo, $allResidentsList, $nurseCertificateTypes, (int)($_SESSION['rhu_staff_login']['staff_id'] ?? 0), 'emerald') ?>
+            <?php endif; ?>
         </main>
 
         <!-- MOBILE BOTTOM TAB BAR -->
@@ -1101,6 +1198,7 @@ $todayOPDCount = count($opdConsultations);
             })();
         </script>
     <?php endif; ?>
+<?= portalRenderNotificationPanel(); ?>
 </body>
 
 </html>

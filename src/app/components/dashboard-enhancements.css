@@ -1,8 +1,16 @@
 :root {
   --dashboard-ink: #0f172a;
-  --dashboard-teal: #0f766e;
-  --dashboard-aqua: #14b8a6;
-  --dashboard-sky: #0284c7;
+  --dashboard-brand-50: #ecfdf5;
+  --dashboard-brand-100: #d1fae5;
+  --dashboard-brand-200: #a7f3d0;
+  --dashboard-brand-500: #10b981;
+  --dashboard-brand-600: #059669;
+  --dashboard-brand-700: #047857;
+  --dashboard-brand-800: #065f46;
+  --dashboard-brand-900: #064e3b;
+  --dashboard-teal: var(--dashboard-brand-700);
+  --dashboard-aqua: var(--dashboard-brand-500);
+  --dashboard-sky: #0f766e;
 }
 
 html {
@@ -10,9 +18,10 @@ html {
 }
 
 body.dashboard-enhanced {
+  background-color: #f8fafc;
   background-image:
-    radial-gradient(circle at 5% 4%, rgba(20, 184, 166, .09), transparent 25rem),
-    radial-gradient(circle at 95% 12%, rgba(14, 165, 233, .07), transparent 28rem);
+    radial-gradient(circle at 5% 4%, rgba(16, 185, 129, .09), transparent 25rem),
+    radial-gradient(circle at 95% 12%, rgba(5, 150, 105, .06), transparent 28rem);
   background-attachment: fixed;
 }
 
@@ -22,7 +31,7 @@ body.dashboard-enhanced::after {
   inset: 0 0 auto;
   z-index: 9999;
   height: 3px;
-  background: linear-gradient(90deg, #10b981, #14b8a6, #0ea5e9, #6366f1);
+  background: linear-gradient(90deg, var(--dashboard-brand-500), var(--dashboard-brand-600), var(--dashboard-brand-700));
   pointer-events: none;
 }
 
@@ -94,8 +103,8 @@ body.dashboard-enhanced::after {
   z-index: 10000;
   width: 0;
   height: 3px;
-  background: linear-gradient(90deg, #34d399, #22d3ee, #60a5fa);
-  box-shadow: 0 0 10px rgba(34, 211, 238, .55);
+  background: linear-gradient(90deg, #34d399, #10b981, #047857);
+  box-shadow: 0 0 10px rgba(16, 185, 129, .5);
   pointer-events: none;
 }
 
@@ -681,6 +690,224 @@ body.staff-logout-open {
 .dashboard-enhanced * {
   scrollbar-width: thin;
   scrollbar-color: #99f6e4 transparent;
+}
+
+/*
+ * Unified RHU dashboard brand
+ * Mirrors the Landing Page's emerald/teal, white, and slate palette. Alert,
+ * danger, and warning colors remain untouched so their meaning stays clear.
+ */
+.dashboard-enhanced.staff-dashboard-enhanced > header {
+  background-color: var(--dashboard-brand-800) !important;
+  background-image: linear-gradient(
+    90deg,
+    var(--dashboard-brand-700),
+    var(--dashboard-brand-800),
+    var(--dashboard-brand-900)
+  ) !important;
+  border-color: rgba(167, 243, 208, .25) !important;
+}
+
+.dashboard-enhanced:not(.staff-dashboard-enhanced) > header {
+  background-color: rgba(255, 255, 255, .96) !important;
+  background-image: none !important;
+  border-color: #e2e8f0 !important;
+}
+
+.dashboard-enhanced :is(
+  .bg-violet-500, .bg-violet-600, .bg-violet-700, .bg-violet-800, .bg-violet-900,
+  .bg-purple-500, .bg-purple-600, .bg-purple-700, .bg-purple-800, .bg-purple-900,
+  .bg-indigo-500, .bg-indigo-600, .bg-indigo-700, .bg-indigo-800, .bg-indigo-900,
+  .bg-pink-500, .bg-pink-600, .bg-pink-700, .bg-pink-800, .bg-pink-900,
+  .bg-blue-500, .bg-blue-600, .bg-blue-700, .bg-blue-800, .bg-blue-900,
+  .bg-cyan-500, .bg-cyan-600, .bg-cyan-700, .bg-cyan-800, .bg-cyan-900,
+  .bg-green-500, .bg-green-600, .bg-green-700, .bg-green-800, .bg-green-900,
+  .bg-teal-500, .bg-teal-600, .bg-teal-700, .bg-teal-800, .bg-teal-900
+) {
+  background-color: var(--dashboard-brand-600) !important;
+}
+
+.dashboard-enhanced :is(
+  .text-violet-500, .text-violet-600, .text-violet-700, .text-violet-800,
+  .text-purple-500, .text-purple-600, .text-purple-700, .text-purple-800,
+  .text-indigo-500, .text-indigo-600, .text-indigo-700, .text-indigo-800,
+  .text-pink-500, .text-pink-600, .text-pink-700, .text-pink-800,
+  .text-blue-500, .text-blue-600, .text-blue-700, .text-blue-800,
+  .text-cyan-500, .text-cyan-600, .text-cyan-700, .text-cyan-800,
+  .text-green-500, .text-green-600, .text-green-700, .text-green-800,
+  .text-teal-500, .text-teal-600, .text-teal-700, .text-teal-800
+) {
+  color: var(--dashboard-brand-700) !important;
+}
+
+.dashboard-enhanced :is(
+  .bg-violet-50, .bg-purple-50, .bg-indigo-50, .bg-pink-50,
+  .bg-blue-50, .bg-cyan-50, .bg-green-50, .bg-teal-50
+) {
+  background-color: var(--dashboard-brand-50) !important;
+}
+
+.dashboard-enhanced :is(
+  .border-violet-100, .border-violet-200, .border-purple-100, .border-purple-200,
+  .border-indigo-100, .border-indigo-200, .border-pink-100, .border-pink-200,
+  .border-blue-100, .border-blue-200, .border-cyan-100, .border-cyan-200,
+  .border-green-100, .border-green-200, .border-teal-100, .border-teal-200
+) {
+  border-color: var(--dashboard-brand-200) !important;
+}
+
+.dashboard-enhanced :is(.staff-drawer-link.is-active, [aria-current="page"]) {
+  border-color: var(--dashboard-brand-200) !important;
+  background-color: var(--dashboard-brand-50) !important;
+  color: var(--dashboard-brand-700) !important;
+}
+
+.dashboard-enhanced ::selection {
+  background: var(--dashboard-brand-500);
+  color: #fff;
+}
+
+/*
+ * Nurse palette shared by the Nurse, Midwife, Medical Technologist, and
+ * Sanitary Inspector portals.
+ */
+.dashboard-enhanced.nurse-palette-dashboard {
+  --clinical-primary: #059669;
+  --clinical-primary-dark: #047857;
+  --clinical-secondary: #0f766e;
+  --clinical-depth: #164e63;
+  --clinical-soft: #ecfdf5;
+  --clinical-border: #a7f3d0;
+}
+
+.dashboard-enhanced.nurse-palette-dashboard > header {
+  background-color: var(--clinical-primary-dark) !important;
+  background-image: linear-gradient(
+    90deg,
+    #065f46,
+    var(--clinical-secondary),
+    var(--clinical-depth)
+  ) !important;
+  border-color: rgba(167, 243, 208, .28) !important;
+}
+
+.dashboard-enhanced.nurse-palette-dashboard :is(
+  .staff-drawer-link.is-active,
+  [aria-current="page"],
+  [data-tab-button].is-active
+) {
+  border-color: var(--clinical-border) !important;
+  background-color: var(--clinical-soft) !important;
+  color: var(--clinical-primary-dark) !important;
+}
+
+.dashboard-enhanced.nurse-palette-dashboard :is(input, select, textarea):focus {
+  border-color: var(--clinical-primary) !important;
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, .12) !important;
+}
+
+.dashboard-enhanced.nurse-palette-dashboard main :is(
+  article,
+  section > .rounded-xl,
+  section > .rounded-2xl,
+  .dashboard-card
+):hover {
+  border-color: rgba(52, 211, 153, .72);
+  box-shadow: 0 16px 34px rgba(6, 95, 70, .11);
+}
+
+/* Replace every former Midwife pink/purple and MedTech violet/indigo accent,
+   including Tailwind opacity variants such as bg-pink-500/20. */
+.dashboard-enhanced.nurse-palette-dashboard :is(
+  [class*="bg-pink-50"],
+  [class*="bg-purple-50"],
+  [class*="bg-fuchsia-50"],
+  [class*="bg-violet-50"],
+  [class*="bg-indigo-50"]
+) {
+  background-color: var(--clinical-soft) !important;
+}
+
+.dashboard-enhanced.nurse-palette-dashboard :is(
+  [class*="bg-pink-1"],
+  [class*="bg-purple-1"],
+  [class*="bg-fuchsia-1"],
+  [class*="bg-violet-1"],
+  [class*="bg-indigo-1"]
+) {
+  background-color: #d1fae5 !important;
+}
+
+.dashboard-enhanced.nurse-palette-dashboard :is(
+  [class*="bg-pink-4"], [class*="bg-pink-5"], [class*="bg-pink-6"], [class*="bg-pink-7"], [class*="bg-pink-8"], [class*="bg-pink-9"],
+  [class*="bg-purple-4"], [class*="bg-purple-5"], [class*="bg-purple-6"], [class*="bg-purple-7"], [class*="bg-purple-8"], [class*="bg-purple-9"],
+  [class*="bg-fuchsia-4"], [class*="bg-fuchsia-5"], [class*="bg-fuchsia-6"], [class*="bg-fuchsia-7"], [class*="bg-fuchsia-8"], [class*="bg-fuchsia-9"],
+  [class*="bg-violet-4"], [class*="bg-violet-5"], [class*="bg-violet-6"], [class*="bg-violet-7"], [class*="bg-violet-8"], [class*="bg-violet-9"],
+  [class*="bg-indigo-4"], [class*="bg-indigo-5"], [class*="bg-indigo-6"], [class*="bg-indigo-7"], [class*="bg-indigo-8"], [class*="bg-indigo-9"]
+) {
+  background-color: var(--clinical-primary) !important;
+}
+
+.dashboard-enhanced.nurse-palette-dashboard :is(
+  [class*="text-pink-"],
+  [class*="text-purple-"],
+  [class*="text-fuchsia-"],
+  [class*="text-violet-"],
+  [class*="text-indigo-"]
+) {
+  color: var(--clinical-primary-dark) !important;
+}
+
+.dashboard-enhanced.nurse-palette-dashboard :is(
+  [class*="border-pink-"],
+  [class*="border-purple-"],
+  [class*="border-fuchsia-"],
+  [class*="border-violet-"],
+  [class*="border-indigo-"]
+) {
+  border-color: var(--clinical-border) !important;
+}
+
+.dashboard-enhanced.nurse-palette-dashboard :is(
+  [class*="ring-pink-"],
+  [class*="ring-purple-"],
+  [class*="ring-fuchsia-"],
+  [class*="ring-violet-"],
+  [class*="ring-indigo-"]
+) {
+  --tw-ring-color: rgba(16, 185, 129, .3) !important;
+}
+
+/* Light cards and translucent panels must stay light. These overrides come
+   after the primary-accent mapping so forms never become solid green. */
+.dashboard-enhanced.nurse-palette-dashboard :is(
+  [class~="bg-pink-50"], [class~="bg-pink-50/50"], [class~="bg-pink-50/60"],
+  [class~="bg-purple-50"],
+  [class~="bg-fuchsia-50"],
+  [class~="bg-violet-50"], [class~="bg-violet-50/60"],
+  [class~="bg-indigo-50"]
+) {
+  background-color: var(--clinical-soft) !important;
+}
+
+.dashboard-enhanced.nurse-palette-dashboard :is(
+  [class~="bg-pink-500/10"], [class~="bg-pink-500/20"], [class~="bg-pink-500/30"],
+  [class~="bg-purple-500/10"], [class~="bg-purple-500/20"], [class~="bg-purple-500/30"],
+  [class~="bg-fuchsia-500/10"], [class~="bg-fuchsia-500/20"], [class~="bg-fuchsia-500/30"],
+  [class~="bg-violet-500/10"], [class~="bg-violet-500/20"], [class~="bg-violet-500/30"],
+  [class~="bg-indigo-500/10"], [class~="bg-indigo-500/20"], [class~="bg-indigo-500/30"]
+) {
+  background-color: rgba(16, 185, 129, .1) !important;
+}
+
+.dashboard-enhanced.nurse-palette-dashboard :is(
+  [class~="text-pink-100"], [class~="text-pink-200"], [class~="text-pink-200/90"],
+  [class~="text-purple-100"], [class~="text-purple-200"], [class~="text-purple-200/90"],
+  [class~="text-fuchsia-100"], [class~="text-fuchsia-200"], [class~="text-fuchsia-200/90"],
+  [class~="text-violet-100"], [class~="text-violet-200"], [class~="text-violet-200/90"],
+  [class~="text-indigo-100"], [class~="text-indigo-200"], [class~="text-indigo-200/90"]
+) {
+  color: #a7f3d0 !important;
 }
 
 @media (prefers-reduced-motion: reduce) {

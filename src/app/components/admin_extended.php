@@ -23,52 +23,29 @@ function adminDownloadSqlBackup(PDO $pdo): never
 
 function adminDownloadCertificatePdf(PDO $pdo, int $certificateId): never
 {
-    $stmt = $pdo->prepare("SELECT hc.certificate_number,hc.issue_date,hc.expiry_date,hc.purpose,hc.validity_status,ct.certificate_type_name,r.first_name,r.last_name,r.barangay FROM health_certificates hc JOIN certificate_types ct ON ct.id=hc.certificate_type_id JOIN residents r ON r.id=hc.resident_id WHERE hc.id=? AND hc.validity_status='Approved & Issued'");
+    $stmt = $pdo->prepare("SELECT hc.id,hc.certificate_number,hc.generated_html,hc.validity_status,ct.certificate_type_name FROM health_certificates hc JOIN certificate_types ct ON ct.id=hc.certificate_type_id WHERE hc.id=?");
     $stmt->execute([$certificateId]);
     $certificate = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$certificate) {
         http_response_code(404);
-        exit('Approved certificate not found.');
+        exit('Certificate not found.');
     }
-    $clean = static fn($v) => str_replace(['\\', '(', ')', "\r", "\n"], ['\\\\', '\\(', '\\)', ' ', ' '], (string)$v);
-    $lines = [
-        'REDPULSE RURAL HEALTH UNIT',
-        strtoupper($certificate['certificate_type_name']),
-        'Certificate No: ' . $certificate['certificate_number'],
-        '',
-        'This certifies that ' . $certificate['first_name'] . ' ' . $certificate['last_name'],
-        'of Barangay ' . $certificate['barangay'] . ' has an approved RHU record.',
-        'Purpose: ' . $certificate['purpose'],
-        'Issued: ' . $certificate['issue_date'],
-        'Valid until: ' . ($certificate['expiry_date'] ?: 'Not specified'),
-    ];
-    $stream = "BT /F1 16 Tf 72 760 Td ";
-    foreach ($lines as $index => $line) {
-        if ($index) $stream .= "0 -34 Td ";
-        $stream .= '(' . $clean($line) . ") Tj ";
+    $certificateHtml = trim((string)($certificate['generated_html'] ?? ''));
+    if ($certificateHtml === '' && function_exists('portalGenerateCertificateHtml')) {
+        $certificateHtml = portalGenerateCertificateHtml($pdo, $certificateId, true);
+        $updateHtml = $pdo->prepare('UPDATE health_certificates SET generated_html = :html WHERE id = :id');
+        $updateHtml->execute(['html' => $certificateHtml, 'id' => $certificateId]);
     }
-    $stream .= 'ET';
-    $objects = [
-        '<< /Type /Catalog /Pages 2 0 R >>',
-        '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
-        '<< /Length ' . strlen($stream) . " >>\nstream\n{$stream}\nendstream",
-        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>',
-    ];
-    $pdf = "%PDF-1.4\n";
-    $offsets = [0];
-    foreach ($objects as $i => $object) {
-        $offsets[] = strlen($pdf);
-        $pdf .= ($i + 1) . " 0 obj\n{$object}\nendobj\n";
-    }
-    $xref = strlen($pdf);
-    $pdf .= "xref\n0 " . (count($objects) + 1) . "\n0000000000 65535 f \n";
-    for ($i = 1; $i <= count($objects); $i++) $pdf .= sprintf("%010d 00000 n \n", $offsets[$i]);
-    $pdf .= "trailer << /Size " . (count($objects) + 1) . " /Root 1 0 R >>\nstartxref\n{$xref}\n%%EOF";
-    header('Content-Type: application/pdf');
-    header('Content-Disposition: attachment; filename="certificate-' . preg_replace('/[^A-Za-z0-9-]/', '', $certificate['certificate_number']) . '.pdf"');
-    header('Content-Length: ' . strlen($pdf));
-    echo $pdf;
+    $fileName = 'certificate-' . preg_replace('/[^A-Za-z0-9-]/', '', (string)$certificate['certificate_number']) . '.html';
+    $html = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+        . '<title>' . htmlspecialchars((string)$certificate['certificate_type_name'], ENT_QUOTES, 'UTF-8') . '</title><style>'
+        . '*{box-sizing:border-box}body{margin:0;background:#e5e7eb;color:#111;font-family:Arial,sans-serif}.toolbar{position:sticky;top:0;z-index:5;display:flex;justify-content:center;gap:10px;padding:14px;background:#0f766e}.toolbar button{border:1px solid rgba(255,255,255,.5);border-radius:8px;background:#fff;padding:9px 16px;color:#0f766e;font:700 13px Arial;cursor:pointer}'
+        . '.official-certificate-template{position:relative;overflow:hidden;margin:24px auto;width:min(100%,760px);min-height:1040px;background:#fff;padding:58px 68px 44px;color:#050505;font-family:Arial,Helvetica,sans-serif;line-height:1.45;box-shadow:0 18px 50px rgba(15,23,42,.18)}.cert-header{position:relative;z-index:1;display:grid;grid-template-columns:112px 1fr 112px;align-items:center;text-align:center;margin-bottom:10px}.cert-seal{width:96px;height:96px;object-fit:contain;justify-self:center}.cert-watermark{position:absolute;z-index:0;left:50%;top:285px;width:560px;height:560px;transform:translateX(-50%);object-fit:contain;opacity:.1;pointer-events:none}.cert-header-copy{font-size:11px;line-height:1.2}.cert-header-copy p{margin:0}.cert-republic{font-family:Georgia,"Times New Roman",serif;font-style:italic;font-size:13px}.cert-rule{position:relative;z-index:1;border-top:2px solid #111;border-bottom:1px solid #111;height:4px;margin:6px 0 42px}.official-certificate-template h1,.official-certificate-template h2,.official-certificate-template h3{position:relative;z-index:1;margin:5px 0;text-align:center;font-weight:900;text-transform:uppercase}.official-certificate-template h1{font-size:18px}.official-certificate-template h2{font-size:21px;font-style:italic}.official-certificate-template h3{font-size:28px;margin-bottom:2px}.cert-no{position:relative;z-index:1;text-align:center;font-family:"Courier New",monospace;font-size:10px;font-weight:700;color:#334155;margin:0 0 44px}.cert-body{position:relative;z-index:1;margin:0;font-size:12px;line-height:1.65;text-align:justify}.cert-body p{margin:0 0 18px;text-indent:34px}.cert-body .cert-greeting{text-indent:0;margin-bottom:26px;text-align:left}.cert-dates{display:flex;gap:34px;margin-top:6px;font-size:10px;text-align:left}.cert-signatures{position:relative;z-index:1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:52px;margin-top:118px;text-align:center}.cert-signatures>div{min-height:104px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;font-size:12px}.cert-signatures strong{border-top:1px solid #111;min-width:250px;padding-top:5px;font-weight:900;text-transform:uppercase}.certificate-signature-image{display:block;width:170px;height:58px;margin:0 auto -5px;object-fit:contain;object-position:center bottom;mix-blend-mode:multiply}.signature-line{height:58px;margin-bottom:-5px;width:170px}.official-certificate-template small,.cert-footer{display:block;color:#111;font-size:10px}.cert-footer{position:absolute;z-index:1;left:68px;right:68px;bottom:40px;display:flex;justify-content:space-between;border-top:1px solid #64748b;padding-top:6px;font-family:"Courier New",monospace;color:#0f172a}@media print{@page{size:A4 portrait;margin:0}body{background:#fff}.toolbar{display:none}.official-certificate-template{width:210mm;min-height:297mm;margin:0;box-shadow:none}}'
+        . '</style></head><body><div class="toolbar"><button onclick="window.print()">Save as PDF</button></div>' . $certificateHtml . '</body></html>';
+    header('Content-Type: text/html; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="' . $fileName . '"');
+    header('Content-Length: ' . strlen($html));
+    echo $html;
     exit;
 }
 
@@ -176,12 +153,25 @@ function adminExtendedAction(PDO $pdo, string $action, int $adminId): ?string
 
     if ($action === 'save_medicine') {
         $id = (int)($_POST['medicine_id'] ?? 0);
+        $genericName = trim($_POST['generic_name'] ?? '');
+        $brandName = trim($_POST['brand_name'] ?? '');
+        $dosage = trim($_POST['dosage'] ?? 'Standard');
+        $unitForm = trim($_POST['unit_form'] ?? 'Tablet');
+        $quantity = (int)($_POST['quantity'] ?? $_POST['quantity_in_stock'] ?? 0);
+        $reorderLevel = (int)($_POST['reorder_level'] ?? 30);
+        if ($reorderLevel <= 0) $reorderLevel = 30;
+        $supplier = trim($_POST['supplier'] ?? 'RHU Supply');
+        $unitCost = (float)($_POST['unit_cost'] ?? 0);
+        $expiryDate = ($_POST['expiry_date'] ?? '') ?: date('Y-m-d', strtotime('+1 year'));
+        $batchNumber = trim($_POST['batch_number'] ?? '');
+        if (empty($batchNumber)) {
+            $batchNumber = 'BATCH-' . date('Y') . '-' . mt_rand(10, 99);
+        }
+
         $values = [
-            trim($_POST['generic_name'] ?? ''), trim($_POST['brand_name'] ?? ''),
-            trim($_POST['dosage'] ?? ''), trim($_POST['unit_form'] ?? ''),
-            (int)($_POST['quantity'] ?? 0), (int)($_POST['reorder_level'] ?? 0),
-            trim($_POST['supplier'] ?? ''), (float)($_POST['unit_cost'] ?? 0),
-            ($_POST['expiry_date'] ?? '') ?: null, trim($_POST['batch_number'] ?? ''),
+            $genericName, $brandName, $dosage, $unitForm,
+            $quantity, $reorderLevel, $supplier, $unitCost,
+            $expiryDate, $batchNumber
         ];
         if ($id) {
             $pdo->prepare('UPDATE medicine_inventory SET generic_name=?,brand_name=?,dosage=?,unit_form=?,quantity_in_stock=?,reorder_level=?,supplier=?,unit_cost=?,expiry_date=?,batch_number=?,last_updated=NOW() WHERE id=?')->execute([...$values, $id]);
@@ -190,7 +180,7 @@ function adminExtendedAction(PDO $pdo, string $action, int $adminId): ?string
             $id = (int)$pdo->lastInsertId();
         }
         $audit('Saved medicine item', 'medicine_inventory', $id);
-        return 'Medicine item saved.';
+        return 'Medicine item saved successfully.';
     }
 
     if ($action === 'delete_medicine') {
@@ -333,6 +323,27 @@ function adminExtendedAction(PDO $pdo, string $action, int $adminId): ?string
 
 function renderAdminExtendedPanel(PDO $pdo, string $tab): void
 {
+    echo '<style>
+        .admin-tool-group {
+            position: relative;
+            z-index: 40;
+        }
+        .admin-tool-group > summary::-webkit-details-marker { display: none; }
+        .admin-tool-group > summary::marker { display: none; }
+        .admin-tool-group .admin-tool-panel {
+            position: absolute;
+            left: 0;
+            top: calc(100% + .6rem);
+            width: min(100%, 1200px);
+            z-index: 9999;
+            box-shadow: 0 24px 50px rgba(15, 23, 42, .18);
+        }
+        @keyframes adminToolPopup {
+            0% { opacity: 0; transform: scale(.97) translateY(-8px); }
+            100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+    </style>';
+
     $residents = $pdo->query("SELECT id, CONCAT(first_name,' ',last_name) name FROM residents ORDER BY first_name LIMIT 500")->fetchAll(PDO::FETCH_ASSOC);
     $staff = $pdo->query("SELECT s.id, CONCAT(u.first_name,' ',u.last_name) name FROM staff s JOIN users u ON u.id=s.user_id ORDER BY u.first_name")->fetchAll(PDO::FETCH_ASSOC);
     $select = static function (string $name, array $rows, string $placeholder): void {
@@ -340,8 +351,21 @@ function renderAdminExtendedPanel(PDO $pdo, string $tab): void
         foreach ($rows as $row) echo '<option value="' . (int)$row['id'] . '">' . htmlspecialchars($row['name']) . '</option>';
         echo '</select>';
     };
-    $open = '<details class="mb-4 rounded-xl border border-purple-100 bg-white p-4 shadow-sm"><summary class="cursor-pointer font-bold text-purple-900">Database Management Tools</summary><div class="mt-4 grid gap-4">';
-    $close = '</div></details>';
+    $toolTitles = [
+        'residents' => '👥 Resident Registration & Management Tools',
+        'staff' => '👨‍⚕️ Staff Account & Profile Management Tools',
+        'vaccination' => '💉 Immunization & Vaccination Management Tools',
+        'maternal' => '🤰 Maternal Health & Pregnancy Tools',
+        'disease' => '🦠 Disease Surveillance & Case Management Tools',
+        'medicine' => '💊 Medicine Inventory Management Tools',
+        'vital' => '📜 Vital Statistics (Birth & Death) Management Tools',
+        'reports' => '📊 DOH & Health Report Generation Tools',
+        'security' => '🔒 System Roles & Security Permissions Tools',
+    ];
+
+    $title = $toolTitles[$tab] ?? 'Database Management Tools';
+    $open = '<div class="admin-tool-panel mb-4 grid gap-4 rounded-2xl border border-emerald-100 bg-white/95 p-4 shadow-sm ring-1 ring-emerald-100">';
+    $close = '</div>';
 
     if ($tab === 'residents') {
         echo $open;
@@ -349,6 +373,7 @@ function renderAdminExtendedPanel(PDO $pdo, string $tab): void
         echo $close;
     } elseif ($tab === 'staff') {
         echo $open;
+        echo '<div class="create-staff-panel bg-white rounded-xl shadow-sm border border-gray-100 space-y-4"><div class="create-staff-heading"><div><h3 class="font-bold text-gray-900 text-base">Create Staff Account</h3><p class="text-xs text-gray-500">Create a login account and staff profile in one step.</p></div></div><form method="post" class="create-staff-form grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs"><input type="hidden" name="action" value="create_staff"><label class="block">First Name * <input required name="first_name" class="mt-1 w-full p-2 border rounded border-gray-300"></label><label class="block">Last Name * <input required name="last_name" class="mt-1 w-full p-2 border rounded border-gray-300"></label><label class="block">Email Address * <input required type="email" name="email" class="mt-1 w-full p-2 border rounded border-gray-300"></label><label class="block">Password * <input required type="password" name="password" class="mt-1 w-full p-2 border rounded border-gray-300"></label><label class="block">Staff Position * <select required name="staff_type" class="mt-1 w-full p-2 border rounded border-gray-300"><option value="ADMIN_STAFF">RHU Admin Staff</option><option value="PHYSICIAN">Rural Health Physician</option><option value="NURSE">Public Health Nurse</option><option value="MIDWIFE">Midwife</option><option value="MEDTECH">Medical Technologist</option><option value="SANITARY_INSPECTOR">Sanitary Inspector</option><option value="BHW">Barangay Health Worker (BHW)</option></select></label><label class="block">PRC License / Badge No. <input name="license_number" class="mt-1 w-full p-2 border rounded border-gray-300"></label><label class="block">Specialization <input name="specialization" class="mt-1 w-full p-2 border rounded border-gray-300" placeholder="Public Health"></label><label class="block">Contact Phone <input name="phone_number" class="mt-1 w-full p-2 border rounded border-gray-300"></label><div class="sm:col-span-2 flex items-center justify-end gap-2 pt-2"><button type="submit" class="px-4 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-700">Save Staff Account</button></div></form></div>';
         echo '<form method="post" class="grid gap-2 text-xs sm:grid-cols-4"><input type="hidden" name="action" value="save_staff_profile">';
         $select('staff_id', $staff, 'Select staff');
         echo '<input required name="staff_type" placeholder="Position" class="rounded border p-2"><input name="license_number" placeholder="License" class="rounded border p-2"><input type="date" name="license_expiry" class="rounded border p-2"><input name="specialization" placeholder="Specialization" class="rounded border p-2"><input name="phone_number" placeholder="Phone" class="rounded border p-2"><input name="address" placeholder="Address" class="rounded border p-2"><input type="date" name="date_hired" class="rounded border p-2"><button class="rounded bg-emerald-700 p-2 font-bold text-white">Update Staff</button></form>';
@@ -371,7 +396,53 @@ function renderAdminExtendedPanel(PDO $pdo, string $tab): void
         $select('resident_id', $residents, 'Resident'); $select('disease_id', $diseases, 'Disease');
         echo '<input required type="date" name="case_date" class="rounded border p-2"><input type="date" name="onset_date" class="rounded border p-2"><select name="classification" class="rounded border p-2"><option>Suspected</option><option>Probable</option><option>Confirmed</option></select><input name="symptoms" placeholder="Symptoms" class="rounded border p-2"><input name="treatment" placeholder="Treatment" class="rounded border p-2"><input name="outcome" value="Active" placeholder="Outcome" class="rounded border p-2"><input name="case_status" value="Open" placeholder="Status" class="rounded border p-2"><label><input type="checkbox" name="reported_to_doh"> Reported to DOH</label><button class="rounded bg-red-700 p-2 font-bold text-white">Create Disease Case</button></form>' . $close;
     } elseif ($tab === 'medicine') {
-        echo $open . '<form method="post" class="grid gap-2 text-xs sm:grid-cols-4"><input type="hidden" name="action" value="save_medicine"><input type="number" name="medicine_id" placeholder="Existing ID (blank=new)" class="rounded border p-2"><input required name="generic_name" placeholder="Generic name" class="rounded border p-2"><input name="brand_name" placeholder="Brand" class="rounded border p-2"><input name="dosage" placeholder="Dosage" class="rounded border p-2"><input name="unit_form" placeholder="Unit form" class="rounded border p-2"><input type="number" name="quantity" placeholder="Quantity" class="rounded border p-2"><input type="number" name="reorder_level" placeholder="Reorder level" class="rounded border p-2"><input name="supplier" placeholder="Supplier" class="rounded border p-2"><input type="number" step=".01" name="unit_cost" placeholder="Unit cost" class="rounded border p-2"><input type="date" name="expiry_date" class="rounded border p-2"><input name="batch_number" placeholder="Batch" class="rounded border p-2"><button class="rounded bg-orange-700 p-2 font-bold text-white">Create / Update Medicine</button></form><form method="post" onsubmit="return confirm(\'Delete medicine item?\')" class="flex gap-2 text-xs"><input type="hidden" name="action" value="delete_medicine"><input required type="number" name="medicine_id" placeholder="Medicine ID" class="rounded border p-2"><button class="rounded bg-red-700 px-4 text-white">Delete</button></form>' . $close;
+        $defaultExpiry = date('Y-m-d', strtotime('+1 year'));
+        echo $open . '
+        <form method="post" class="bg-gradient-to-r from-orange-50/80 to-amber-50/80 p-4 rounded-xl border border-orange-200/80 space-y-3 text-xs mb-3 shadow-xs">
+            <input type="hidden" name="action" value="save_medicine">
+            <div class="flex items-center justify-between border-b border-orange-200/60 pb-2">
+                <h3 class="font-bold text-orange-950 text-sm flex items-center gap-1.5">
+                    <span>💊 Add Medicine to Inventory</span>
+                </h3>
+                <span class="text-[10px] text-orange-800 font-bold bg-orange-100 px-2.5 py-0.5 rounded-full border border-orange-200">Essential Details Only</span>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+                <div>
+                    <label class="block font-bold text-gray-700 mb-1">Generic Name <span class="text-red-500">*</span></label>
+                    <input required name="generic_name" placeholder="e.g. Paracetamol" class="w-full rounded-lg border border-gray-300 p-2 text-xs focus:border-orange-500 bg-white shadow-2xs">
+                </div>
+                <div>
+                    <label class="block font-bold text-gray-700 mb-1">Brand Name</label>
+                    <input name="brand_name" placeholder="e.g. Biogesic" class="w-full rounded-lg border border-gray-300 p-2 text-xs focus:border-orange-500 bg-white shadow-2xs">
+                </div>
+                <div>
+                    <label class="block font-bold text-gray-700 mb-1">Quantity in Stock <span class="text-red-500">*</span></label>
+                    <input required type="number" min="1" name="quantity" placeholder="e.g. 100" class="w-full rounded-lg border border-gray-300 p-2 text-xs focus:border-orange-500 bg-white font-bold text-gray-900 shadow-2xs">
+                </div>
+                <div>
+                    <label class="block font-bold text-gray-700 mb-1">Expiry Date <span class="text-red-500">*</span></label>
+                    <input required type="date" name="expiry_date" value="' . $defaultExpiry . '" class="w-full rounded-lg border border-gray-300 p-2 text-xs focus:border-orange-500 bg-white shadow-2xs">
+                </div>
+                <div>
+                    <label class="block font-bold text-gray-700 mb-1">Reorder Alert Level</label>
+                    <input type="number" min="1" name="reorder_level" value="30" placeholder="30" class="w-full rounded-lg border border-gray-300 p-2 text-xs focus:border-orange-500 bg-white shadow-2xs">
+                </div>
+            </div>
+            <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-orange-200/60">
+                <div class="flex items-center gap-2">
+                    <input type="number" name="medicine_id" placeholder="Existing ID to update (blank = new)" class="w-56 rounded-lg border border-gray-300 p-1.5 text-xs bg-white">
+                </div>
+                <button type="submit" class="rounded-lg bg-orange-700 hover:bg-orange-800 px-5 py-2 font-bold text-white shadow-sm transition-all text-xs flex items-center gap-1.5 cursor-pointer">
+                    <span>＋</span> Save Medicine Item
+                </button>
+            </div>
+        </form>
+        <form method="post" onsubmit="return confirm(\'Delete medicine item?\')" class="flex items-center gap-2 text-xs bg-red-50/60 p-2.5 rounded-lg border border-red-100">
+            <input type="hidden" name="action" value="delete_medicine">
+            <span class="font-bold text-red-800">Delete Item:</span>
+            <input required type="number" name="medicine_id" placeholder="Medicine ID (e.g. 5)" class="w-36 rounded border p-1.5 text-xs bg-white">
+            <button class="rounded-lg bg-red-700 hover:bg-red-800 px-3 py-1.5 font-bold text-white">Delete Item</button>
+        </form>' . $close;
     } elseif ($tab === 'vital') {
         echo $open . '<form method="post" class="grid gap-2 text-xs sm:grid-cols-4"><input type="hidden" name="action" value="save_vital"><select name="vital_type" class="rounded border p-2"><option value="birth">Birth</option><option value="death">Death</option></select><input type="number" name="vital_id" placeholder="Existing ID (blank=new)" class="rounded border p-2"><input required name="certificate_number" placeholder="Certificate number" class="rounded border p-2"><input required name="person_name" placeholder="Child/deceased name" class="rounded border p-2"><input required type="date" name="record_date" class="rounded border p-2"><input type="time" name="record_time" class="rounded border p-2"><input required name="location" placeholder="Place" class="rounded border p-2">';
         $select('mother_id', $residents, 'Mother (birth only)');

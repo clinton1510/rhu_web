@@ -118,6 +118,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
       }
     </script>
+    <link rel="stylesheet" href="../../styles/login-theme.css">
 </head>
 <body class="bg-slate-950 text-white font-sans antialiased min-h-screen flex flex-col justify-between selection:bg-emerald-500 selection:text-white">
 

@@ -528,3 +528,97 @@ table {
     margin-right: auto;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FINAL MOBILE POLISH — Reduce Cognitive Overload
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 640px) {
+  /* Increase line height for better readability */
+  body {
+    line-height: 1.6;
+  }
+
+  /* Better vertical rhythm for text blocks */
+  p {
+    margin-bottom: 12px;
+  }
+
+  /* Tighter sections to avoid excessive scrolling */
+  section {
+    padding-top: 20px !important;
+    padding-bottom: 20px !important;
+  }
+
+  /* Improve card hierarchy */
+  .rounded-2xl,
+  .rounded-xl {
+    padding-top: calc(var(--tw-padding, 0) + 4px) !important;
+    padding-bottom: calc(var(--tw-padding, 0) + 4px) !important;
+  }
+
+  /* Reduce badge/pill sizes */
+  .px-3.py-1,
+  .px-3\.5.py-1\.5 {
+    font-size: 10px !important;
+    padding: 4px 8px !important;
+  }
+
+  /* Better link contrast */
+  a {
+    color: inherit;
+  }
+
+  a:not(.no-underline) {
+    text-decoration: none;
+  }
+
+  /* Improve scroll performance */
+  * {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    backface-visibility: hidden;
+  }
+
+  /* Prevent layout shifts */
+  img {
+    display: block;
+    line-height: 0;
+  }
+
+  /* Better collapse animation on small screens */
+  .transition-all {
+    transition: all 0.25s ease-out;
+  }
+
+  /* Prevent accidental double-tap zoom */
+  button,
+  a {
+    touch-action: manipulation;
+  }
+}
+
+/* Smaller phone optimization (under 360px) */
+@media (max-width: 360px) {
+  .max-w-7xl {
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+  }
+
+  h1 {
+    font-size: 1.5rem !important;
+  }
+
+  h2 {
+    font-size: 1.25rem !important;
+  }
+
+  .text-sm {
+    font-size: 12px !important;
+  }
+
+  button,
+  a[role="button"] {
+    padding: 10px 12px !important;
+  }
+}

@@ -9,7 +9,7 @@ if (session_status() === PHP_SESSION_NONE) session_start();
 $_SESSION['rhu_staff_login'] = ['id' => 18, 'staff_id' => 8, 'role' => 'Administrative Staff'];
 
 ob_start();
-require dirname(__DIR__) . '/src/app/components/RHUDashboard.php';
+require dirname(__DIR__) . '/src/app/components/RHUAdminDashboard.php';
 $html = (string)ob_get_clean();
 
 if (!str_contains($html, '<!DOCTYPE html>') || !str_contains($html, 'RedPulse RHU')) {
