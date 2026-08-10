@@ -145,3 +145,11 @@
 [2026-08-07 04:34:07] TO: bascoguinchedric20@gmail.com | SUBJECT: Your RHU certificate is ready | SUCCESS (SMTP)
 [2026-08-07 04:37:56] TO: bascoguinchedric20@gmail.com | SUBJECT: Your RHU certificate is ready | SUCCESS (SMTP)
 >>>>>>> e67cdeccfed71b027f13d919a4a908b4c09ce7e8
+[2026-08-07 10:27:46] TO: 23-77766@g.batstate-u.edu.ph | SUBJECT: ResiHUnity RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (SMTP)
+[2026-08-07 10:33:28] TO: 23-77766@g.batstate-u.edu.ph | SUBJECT: ResiHUnity RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (SMTP)
+[2026-08-07 10:52:09] TO: 23-77766@g.batstate-u.edu.ph | SUBJECT: ResiHUnity RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (SMTP)
+[2026-08-07 12:32:26] TO: 23-77766@g.batstate-u.edu.ph | SUBJECT: ResiHUnity RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (SMTP)
+[2026-08-07 16:54:53] TO: 23-77766@g.batstate-u.edu.ph | SUBJECT: ResiHUnity RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (SMTP)
+[2026-08-08 15:53:05] TO: 23-77766@g.batstate-u.edu.ph | SUBJECT: ResiHUnity RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (SMTP)
+[2026-08-08 15:53:13] TO: 23-77766@g.batstate-u.edu.ph | SUBJECT: ResiHUnity RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (SMTP)
+[2026-08-08 15:56:55] TO: 23-77766@g.batstate-u.edu.ph | SUBJECT: ResiHUnity RHU - Your 2-Factor Authentication (2FA) Code | SUCCESS (SMTP)
