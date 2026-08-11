@@ -887,11 +887,68 @@ $btnPrimary = 'inline-flex items-center gap-1.5 rounded-xl bg-teal-600 px-4 py-2
                         </section>
                     <?php endif; ?>
 
-                    <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                        <?php foreach ([['Passed', $passed, 'text-green-600', 'bg-green-50'], ['Conditional', $conditional, 'text-yellow-600', 'bg-yellow-50'], ['Failed', $failed, 'text-red-600', 'bg-red-50'], ['Avg Compliance', $avg . '%', 'text-teal-600', 'bg-teal-50']] as [$label, $value, $color, $bg]): ?>
-                            <div class="dashboard-card <?= $bg ?> rounded-xl border border-white p-4 shadow-sm">
-                                <b class="text-2xl font-black <?= $color ?>"><?= e((string) $value) ?></b>
-                                <p class="text-sm font-bold"><?= e($label) ?></p>
+                                        <?php
+                    $inspTotal = count($inspections);
+                    $passPct = $inspTotal ? (int) round(($passed / $inspTotal) * 100) : 0;
+                    $condPct = $inspTotal ? (int) round(($conditional / $inspTotal) * 100) : 0;
+                    $failPct = $inspTotal ? (int) round(($failed / $inspTotal) * 100) : 0;
+                    $kpiCards = [
+                        [
+                            'label' => 'Passed',
+                            'value' => (string) $passed,
+                            'sub' => $inspTotal ? "{$passPct}% of {$inspTotal}" : 'No inspections yet',
+                            'icon_bg' => 'bg-emerald-100 text-emerald-700',
+                            'card_bg' => 'bg-gradient-to-br from-emerald-50 to-white border-emerald-100',
+                            'value_cls' => 'text-emerald-700',
+                            'icon' => '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
+                        ],
+                        [
+                            'label' => 'Conditional',
+                            'value' => (string) $conditional,
+                            'sub' => $inspTotal ? "{$condPct}% of {$inspTotal}" : 'No inspections yet',
+                            'icon_bg' => 'bg-amber-100 text-amber-700',
+                            'card_bg' => 'bg-gradient-to-br from-amber-50 to-white border-amber-100',
+                            'value_cls' => 'text-amber-700',
+                            'icon' => '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>',
+                        ],
+                        [
+                            'label' => 'Failed',
+                            'value' => (string) $failed,
+                            'sub' => $inspTotal ? "{$failPct}% of {$inspTotal}" : 'No inspections yet',
+                            'icon_bg' => 'bg-rose-100 text-rose-700',
+                            'card_bg' => 'bg-gradient-to-br from-rose-50 to-white border-rose-100',
+                            'value_cls' => 'text-rose-700',
+                            'icon' => '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>',
+                        ],
+                        [
+                            'label' => 'Avg Compliance',
+                            'value' => $avg . '%',
+                            'sub' => $inspTotal ? "Across {$inspTotal} inspection" . ($inspTotal === 1 ? '' : 's') : 'No data yet',
+                            'icon_bg' => 'bg-teal-100 text-teal-700',
+                            'card_bg' => 'bg-gradient-to-br from-teal-50 to-white border-teal-100',
+                            'value_cls' => 'text-teal-700',
+                            'icon' => '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>',
+                        ],
+                    ];
+                    ?>
+                    <section class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                        <?php foreach ($kpiCards as $kpi): ?>
+                            <div class="dashboard-card rounded-2xl border <?= $kpi['card_bg'] ?> p-4 shadow-sm">
+                                <div class="flex items-start justify-between gap-2">
+                                    <div class="min-w-0">
+                                        <p class="text-[11px] font-bold uppercase tracking-wide text-slate-500"><?= e($kpi['label']) ?></p>
+                                        <p class="mt-1 text-2xl font-black tabular-nums <?= $kpi['value_cls'] ?>"><?= e($kpi['value']) ?></p>
+                                        <p class="mt-1 text-[11px] font-medium text-slate-500 truncate"><?= e($kpi['sub']) ?></p>
+                                    </div>
+                                    <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl <?= $kpi['icon_bg'] ?>">
+                                        <?= $kpi['icon'] ?>
+                                    </span>
+                                </div>
+                                <?php if ($kpi['label'] === 'Avg Compliance' && $inspTotal > 0): ?>
+                                    <div class="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                                        <div class="h-1.5 rounded-full bg-teal-500 transition-all" style="width: <?= max(0, min(100, (int)$avg)) ?>%"></div>
+                                    </div>
+                                <?php endif; ?>
                             </div>
                         <?php endforeach; ?>
                     </section>
