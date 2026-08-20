@@ -449,7 +449,6 @@ unset($_SESSION['landing_flash']);
             <div id="staff-dropdown-menu" class="hidden absolute right-0 mt-2 w-52 bg-white rounded-2xl shadow-xl border border-slate-100 p-2 z-50 animate-slide-down">
               <span class="block px-3 py-1.5 text-[11px] font-extrabold text-slate-400 uppercase tracking-wider">Staff Access</span>
               <a href="RHULogin.php" class="block px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-brand-50 hover:text-brand-700">🏥 RHU Healthcare Staff</a>
-              <a href="BHWLogin.php" class="block px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-brand-50 hover:text-brand-700">📋 Barangay Health Worker</a>
               <a href="RHUAdminLogin.php" class="block px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-brand-50 hover:text-brand-700">⚙️ System Administrator</a>
             </div>
           </div>
@@ -500,8 +499,6 @@ unset($_SESSION['landing_flash']);
         <a href="ResidentRegistration.php" class="w-full text-center py-3 rounded-xl bg-gradient-to-r from-brand-600 to-teal-600 text-white font-bold text-sm shadow-md">Register Free Account</a>
         <div class="pt-2 flex justify-around text-xs font-semibold text-slate-500 border-t border-slate-100">
           <a href="RHULogin.php" class="hover:text-brand-600">RHU Staff</a>
-          <span>•</span>
-          <a href="BHWLogin.php" class="hover:text-brand-600">BHW Portal</a>
           <span>•</span>
           <a href="RHUAdminLogin.php" class="hover:text-brand-600">Admin Console</a>
         </div>

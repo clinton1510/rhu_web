@@ -719,7 +719,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
         }
     }
 
-    // Action: Create New Healthcare Staff
+    // Action: Create New Healthcare Staff / BHW Account
     if ($action === 'create_staff') {
         $firstName = trim($_POST['first_name'] ?? '');
         $lastName = trim($_POST['last_name'] ?? '');
@@ -730,6 +730,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
         $licenseNumber = trim($_POST['license_number'] ?? '');
         $phone = trim($_POST['phone_number'] ?? '');
         $address = trim($_POST['address'] ?? '');
+        $barangay = trim($_POST['barangay'] ?? '');
+        $customCertNumber = trim($_POST['cert_number'] ?? '');
 
         if ($firstName === '' || $lastName === '' || $email === '' || $password === '') {
             $flashError = "Please fill in all required fields.";
@@ -754,11 +756,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($pdo)) {
                 $newUserId = (int)$pdo->lastInsertId();
 
                 $insStaff = $pdo->prepare("INSERT INTO staff (user_id, staff_type, license_number, specialization, phone_number, address, date_hired, is_active) VALUES (:uid, :st, :lic, :spec, :phone, :addr, CURDATE(), 1)");
-                $insStaff->execute(['uid' => $newUserId, 'st' => $staffType, 'lic' => $licenseNumber, 'spec' => $specialization, 'phone' => $phone, 'addr' => $address]);
+                $insStaff->execute([
+                    'uid' => $newUserId,
+                    'st' => $staffType,
+                    'lic' => $licenseNumber,
+                    'spec' => $specialization,
+                    'phone' => $phone,
+                    'addr' => $address
+                ]);
+                $newStaffId = (int)$pdo->lastInsertId();
 
-                $pdo->commit();
-                portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Created new Healthcare Staff Account for {$email} ({$staffType})", 'staff', (int)$pdo->lastInsertId());
-                $flashSuccess = "New staff account created successfully for {$firstName} {$lastName}!";
+                if ($pdo->inTransaction()) {
+                    $pdo->commit();
+                }
+
+                portalAudit($pdo, $_SESSION['user']['user_id'] ?? null, "Created new Healthcare Staff Account for {$email} ({$staffType})", 'staff', $newStaffId);
+                $flashSuccess = "New healthcare staff account created successfully for {$firstName} {$lastName}!";
             } catch (Exception $ex) {
                 if ($pdo->inTransaction()) $pdo->rollBack();
                 $flashError = $ex->getMessage();

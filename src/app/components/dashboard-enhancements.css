@@ -1,65 +1,41 @@
 :root {
-  --dashboard-ink: #0f172a;
-  --dashboard-brand-50: #ecfdf5;
-  --dashboard-brand-100: #d1fae5;
-  --dashboard-brand-200: #a7f3d0;
+  --dashboard-bg-dark: #0b0f11;
+  --dashboard-shell-dark: #0e1411;
+  --dashboard-card-dark: #131916;
+  --dashboard-ink: #f8fafc;
+  --dashboard-brand-50: #022c22;
+  --dashboard-brand-100: #064e3b;
+  --dashboard-brand-200: #065f46;
   --dashboard-brand-500: #10b981;
   --dashboard-brand-600: #059669;
   --dashboard-brand-700: #047857;
   --dashboard-brand-800: #065f46;
-  --dashboard-brand-900: #064e3b;
-  --dashboard-teal: var(--dashboard-brand-700);
-  --dashboard-aqua: var(--dashboard-brand-500);
-  --dashboard-sky: #0f766e;
+  --dashboard-brand-900: #022c22;
+  --dashboard-teal: #10b981;
+  --dashboard-aqua: #34d399;
+  --dashboard-sky: #10b981;
 }
 
 html {
   scroll-behavior: smooth;
+  color-scheme: dark;
 }
 
 body.dashboard-enhanced {
-  background-color: #f8fafc;
-  background-image:
-    radial-gradient(circle at 5% 4%, rgba(16, 185, 129, .09), transparent 25rem),
-    radial-gradient(circle at 95% 12%, rgba(5, 150, 105, .06), transparent 28rem);
-  background-attachment: fixed;
+  background-color: #0b0f11 !important;
+  color: #f8fafc !important;
 }
 
-body.dashboard-enhanced::after {
+body.resident-dashboard {
+  background: transparent !important;
+}
+
+body.resident-dashboard::after {
   content: "";
   position: fixed;
   inset: 0 0 auto;
   z-index: 9999;
   height: 3px;
-  background: linear-gradient(90deg, var(--dashboard-brand-500), var(--dashboard-brand-600), var(--dashboard-brand-700));
-  pointer-events: none;
-}
-
-.dashboard-enhanced header {
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-}
-
-.dashboard-enhanced main :is(article, section > .rounded-xl, section > .rounded-2xl, .dashboard-card),
-.dashboard-enhanced [data-tab-panel] > :is(div, article) {
-  transition:
-    transform 220ms cubic-bezier(.2, .8, .2, 1),
-    box-shadow 220ms ease,
-    border-color 220ms ease;
-}
-
-.dashboard-enhanced main :is(article, section > .rounded-xl, section > .rounded-2xl, .dashboard-card):hover,
-.dashboard-enhanced [data-tab-panel] > :is(div, article):hover {
-  transform: translateY(-3px) scale(1.012);
-  border-color: rgba(45, 212, 191, .72);
-  box-shadow: 0 16px 34px rgba(15, 118, 110, .11);
-  position: relative;
-  z-index: 2;
-}
-
-.dashboard-enhanced :is(button, a[href]) {
-  -webkit-tap-highlight-color: transparent;
-  transition:
     transform 180ms ease,
     box-shadow 180ms ease,
     background-color 180ms ease,

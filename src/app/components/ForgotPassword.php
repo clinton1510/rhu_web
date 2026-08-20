@@ -56,22 +56,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $step === 'request') {
                     $foundPortal = 'resident';
                     $userDisplayName = trim(($rUser['first_name'] ?? '') . ' ' . ($rUser['last_name'] ?? '')) ?: 'Resident';
                 } else {
-                    // 2. Check bhw table
-                    $bStmt = $pdo->prepare("SELECT id, first_name, last_name, email FROM bhw WHERE email = :e LIMIT 1");
-                    $bStmt->execute(['e' => $email]);
-                    $bUser = $bStmt->fetch(PDO::FETCH_ASSOC);
-                    if ($bUser) {
-                        $foundPortal = 'bhw';
-                        $userDisplayName = trim(($bUser['first_name'] ?? '') . ' ' . ($bUser['last_name'] ?? '')) ?: 'BHW Worker';
-                    } else {
-                        // 3. Check users table (staff/admin)
-                        $uStmt = $pdo->prepare("SELECT id, first_name, last_name, email FROM users WHERE email = :e LIMIT 1");
-                        $uStmt->execute(['e' => $email]);
-                        $uUser = $uStmt->fetch(PDO::FETCH_ASSOC);
-                        if ($uUser) {
-                            $foundPortal = 'staff';
-                            $userDisplayName = trim(($uUser['first_name'] ?? '') . ' ' . ($uUser['last_name'] ?? '')) ?: 'Staff Account';
-                        }
+                    // Check users table (staff/admin)
+                    $uStmt = $pdo->prepare("SELECT id, first_name, last_name, email FROM users WHERE email = :e LIMIT 1");
+                    $uStmt->execute(['e' => $email]);
+                    $uUser = $uStmt->fetch(PDO::FETCH_ASSOC);
+                    if ($uUser) {
+                        $foundPortal = 'staff';
+                        $userDisplayName = trim(($uUser['first_name'] ?? '') . ' ' . ($uUser['last_name'] ?? '')) ?: 'Staff Account';
                     }
                 }
 
@@ -175,9 +166,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $step === 'update_password') {
             // Update in corresponding database table
             if ($targetPortal === 'resident') {
                 $up = $pdo->prepare("UPDATE residents SET password_hash = :h WHERE email = :e");
-                $up->execute(['h' => $passHash, 'e' => $userEmail]);
-            } elseif ($targetPortal === 'bhw') {
-                $up = $pdo->prepare("UPDATE bhw SET password_hash = :h WHERE email = :e");
                 $up->execute(['h' => $passHash, 'e' => $userEmail]);
             } else {
                 $up = $pdo->prepare("UPDATE users SET password_hash = :h WHERE email = :e");

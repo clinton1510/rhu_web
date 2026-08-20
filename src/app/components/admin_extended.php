@@ -373,7 +373,65 @@ function renderAdminExtendedPanel(PDO $pdo, string $tab): void
         echo $close;
     } elseif ($tab === 'staff') {
         echo $open;
-        echo '<div class="create-staff-panel bg-white rounded-xl shadow-sm border border-gray-100 space-y-4"><div class="create-staff-heading"><div><h3 class="font-bold text-gray-900 text-base">Create Staff Account</h3><p class="text-xs text-gray-500">Create a login account and staff profile in one step.</p></div></div><form method="post" class="create-staff-form grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs"><input type="hidden" name="action" value="create_staff"><label class="block">First Name * <input required name="first_name" class="mt-1 w-full p-2 border rounded border-gray-300"></label><label class="block">Last Name * <input required name="last_name" class="mt-1 w-full p-2 border rounded border-gray-300"></label><label class="block">Email Address * <input required type="email" name="email" class="mt-1 w-full p-2 border rounded border-gray-300"></label><label class="block">Password * <input required type="password" name="password" class="mt-1 w-full p-2 border rounded border-gray-300"></label><label class="block">Staff Position * <select required name="staff_type" class="mt-1 w-full p-2 border rounded border-gray-300"><option value="ADMIN_STAFF">RHU Admin Staff</option><option value="PHYSICIAN">Rural Health Physician</option><option value="NURSE">Public Health Nurse</option><option value="MIDWIFE">Midwife</option><option value="MEDTECH">Medical Technologist</option><option value="SANITARY_INSPECTOR">Sanitary Inspector</option><option value="BHW">Barangay Health Worker (BHW)</option></select></label><label class="block">PRC License / Badge No. <input name="license_number" class="mt-1 w-full p-2 border rounded border-gray-300"></label><label class="block">Specialization <input name="specialization" class="mt-1 w-full p-2 border rounded border-gray-300" placeholder="Public Health"></label><label class="block">Contact Phone <input name="phone_number" class="mt-1 w-full p-2 border rounded border-gray-300"></label><div class="sm:col-span-2 flex items-center justify-end gap-2 pt-2"><button type="submit" class="px-4 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-700">Save Staff Account</button></div></form></div>';
+        $nasugbuBarangays = [
+            'Barangay 1 (Poblacion)', 'Barangay 2 (Poblacion)', 'Barangay 3 (Poblacion)', 'Barangay 4 (Poblacion)', 
+            'Barangay 5 (Poblacion)', 'Barangay 6 (Poblacion)', 'Barangay 7 (Poblacion)', 'Barangay 8 (Poblacion)', 
+            'Barangay 9 (Poblacion)', 'Barangay 10 (Poblacion)', 'Barangay 11 (Poblacion)', 'Barangay 12 (Poblacion)', 
+            'Aga', 'Balaytigue', 'Banilad', 'Bilaran', 'Bucana', 'Calayo', 'Catandaan', 'Cogunan', 'Dayap', 'Looc', 
+            'Lumbangan', 'Malabrigo', 'Mataas Na Pulo', 'Maugat', 'Papaya', 'Reparo', 'Talangan', 'Tumalim', 'Utod', 'Wawa'
+        ];
+        try {
+            $dbBrgys = $pdo->query("SELECT name FROM barangays ORDER BY name")->fetchAll(PDO::FETCH_COLUMN);
+            if (!empty($dbBrgys)) $nasugbuBarangays = array_unique(array_merge($dbBrgys, $nasugbuBarangays));
+        } catch (Throwable $eBrgy) {}
+        sort($nasugbuBarangays);
+
+        $brgyOptionsHtml = '<option value="">-- Select Barangay --</option>';
+        foreach ($nasugbuBarangays as $bName) {
+            $brgyOptionsHtml .= '<option value="' . htmlspecialchars($bName) . '">' . htmlspecialchars($bName) . '</option>';
+        }
+
+        echo '<div class="create-staff-panel bg-white rounded-xl shadow-sm border border-gray-100 space-y-4 p-4">
+            <div class="create-staff-heading">
+                <div>
+                    <h3 class="font-bold text-gray-900 text-base flex items-center gap-2">
+                        <span>👨‍⚕️ Create RHU Healthcare Staff Account</span>
+                    </h3>
+                    <p class="text-xs text-gray-500">Create a login account for RHU physicians, nurses, midwives, medtechs, and sanitary inspectors.</p>
+                </div>
+            </div>
+            <form method="post" class="create-staff-form grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                <input type="hidden" name="action" value="create_staff">
+                <label class="block">First Name * <input required name="first_name" placeholder="First Name" class="mt-1 w-full p-2 border rounded border-gray-300 bg-white"></label>
+                <label class="block">Last Name * <input required name="last_name" placeholder="Last Name" class="mt-1 w-full p-2 border rounded border-gray-300 bg-white"></label>
+                <label class="block">Email Address * <input required type="email" name="email" placeholder="staff.name@nasugbu.gov.ph" class="mt-1 w-full p-2 border rounded border-gray-300 bg-white"></label>
+                <label class="block">Password * <input required type="password" name="password" placeholder="Account Password" class="mt-1 w-full p-2 border rounded border-gray-300 bg-white"></label>
+                <label class="block">Staff Position * 
+                    <select required name="staff_type" id="staff_type_select" class="mt-1 w-full p-2 border rounded border-gray-300 bg-white font-bold text-gray-800">
+                        <option value="PHYSICIAN" selected>Rural Health Physician</option>
+                        <option value="NURSE">Public Health Nurse</option>
+                        <option value="MIDWIFE">Midwife</option>
+                        <option value="MEDTECH">Medical Technologist</option>
+                        <option value="SANITARY_INSPECTOR">Sanitary Inspector</option>
+                        <option value="ADMIN_STAFF">RHU Admin Staff</option>
+                    </select>
+                </label>
+                <label class="block">License Number / PRC No. 
+                    <input name="license_number" placeholder="PRC License No." class="mt-1 w-full p-2 border rounded border-gray-300 bg-white font-mono">
+                </label>
+                <label class="block">Contact Phone Number 
+                    <input name="phone_number" placeholder="e.g. 09171234567" class="mt-1 w-full p-2 border rounded border-gray-300 bg-white">
+                </label>
+                <label class="block">Specialization / Department 
+                    <input name="specialization" placeholder="e.g. General Medicine, Maternal Care" class="mt-1 w-full p-2 border rounded border-gray-300 bg-white">
+                </label>
+                <div class="sm:col-span-2 flex items-center justify-end gap-2 pt-2 border-t border-gray-100">
+                    <button type="submit" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold shadow-sm transition-all text-xs flex items-center gap-1.5 cursor-pointer">
+                        <span>💾</span> Save Healthcare Staff Account
+                    </button>
+                </div>
+            </form>
+        </div>';
         echo '<form method="post" class="grid gap-2 text-xs sm:grid-cols-4"><input type="hidden" name="action" value="save_staff_profile">';
         $select('staff_id', $staff, 'Select staff');
         echo '<input required name="staff_type" placeholder="Position" class="rounded border p-2"><input name="license_number" placeholder="License" class="rounded border p-2"><input type="date" name="license_expiry" class="rounded border p-2"><input name="specialization" placeholder="Specialization" class="rounded border p-2"><input name="phone_number" placeholder="Phone" class="rounded border p-2"><input name="address" placeholder="Address" class="rounded border p-2"><input type="date" name="date_hired" class="rounded border p-2"><button class="rounded bg-emerald-700 p-2 font-bold text-white">Update Staff</button></form>';

@@ -8,9 +8,8 @@ if (session_status() === PHP_SESSION_NONE) session_start();
 $component = isset($_GET['component']) ? basename($_GET['component']) : 'LandingPage';
 $basePath = __DIR__;
 
-// Map of components to their PHP equivalents
 $components = [
-    'AdminDashboard', 'AdminLogin', 'AdminStaffDashboard', 'BHWDashboard', 'BHWLogin',
+    'AdminDashboard', 'AdminLogin', 'AdminStaffDashboard',
     'DeviceIndicator', 'DonationCertificate', 'DonorDashboard', 'HospitalRegistration',
     'LandingPage', 'LoginSelection', 'MedTechDashboard', 'MidwifeDashboard', 'NurseDashboard',
     'PlatformAwareDashboard', 'ResidentDashboard', 'ResidentLogin', 'RHUAdminDashboard',

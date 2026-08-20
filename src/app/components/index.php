@@ -49,8 +49,6 @@ if (isset($_GET['component'])) {
         'login' => 'LoginSelection',
         'admin/login' => 'AdminLogin',
         'admin/dashboard' => 'AdminDashboard',
-        'bhw/login' => 'BHWLogin',
-        'bhw/dashboard' => 'BHWDashboard',
         'resident/login' => 'ResidentLogin',
         'resident/register' => 'ResidentRegistration',
         'resident/registration' => 'ResidentRegistration',
